@@ -1,8 +1,9 @@
 """
 Player system for Hearthstone Battlegrounds.
 
-A Player owns all state that belongs specifically to that player.
-Game-wide coordination is handled by Bob and the phase systems.
+A Player owns Hearthstone state that belongs specifically to that player.
+Game-wide coordination and artificial recruit interaction timing are handled by
+Bob/Recruitment and the RecruitScheduler.
 """
 
 from copy import deepcopy
@@ -27,7 +28,13 @@ class Player:
         # =====================================================
 
         self.gold = 0
-        self.ap = 0
+
+        # AP/waiting used to be stored as game resources on Player.  Keep
+        # compatibility fallbacks for isolated tests/tools, but live recruit
+        # phases bind a RecruitScheduler and use its private scheduling state.
+        self._recruit_scheduler = None
+        self._legacy_ap = 0
+        self._legacy_waiting = False
 
         # =====================================================
         # HERO
@@ -68,8 +75,6 @@ class Player:
         # RECRUIT STATE
         # =====================================================
 
-        self.waiting = False
-
         # Actions currently offered to this player/AI.
         self.action_space = ActionSpace()
 
@@ -96,6 +101,53 @@ class Player:
         # be used as the ghost opponent when the number of
         # living players is odd.
         self.last_combat_board = None
+
+    # =========================================================
+    # RECRUIT-SCHEDULER COMPATIBILITY
+    # =========================================================
+
+    def bind_recruit_scheduler(self, scheduler):
+        """Bind private simulator scheduling state to this seat."""
+
+        self._recruit_scheduler = scheduler
+
+    def _has_scheduler_state(self):
+        return (
+            self._recruit_scheduler is not None
+            and self._recruit_scheduler.has_player(self.player_id)
+        )
+
+    @property
+    def ap(self):
+        """Deprecated alias for remaining scheduler interaction budget."""
+
+        if self._has_scheduler_state():
+            return self._recruit_scheduler.remaining_budget(self.player_id)
+        return self._legacy_ap
+
+    @ap.setter
+    def ap(self, amount):
+        self.set_ap(amount)
+
+    @property
+    def waiting(self):
+        """Deprecated alias for scheduler finished state."""
+
+        if self._has_scheduler_state():
+            return self._recruit_scheduler.is_finished(self.player_id)
+        return self._legacy_waiting
+
+    @waiting.setter
+    def waiting(self, value):
+        value = bool(value)
+        if self._has_scheduler_state():
+            state = self._recruit_scheduler.state_for(self.player_id)
+            if value:
+                self._recruit_scheduler.finish_player(self.player_id, "legacy_waiting")
+            elif state.finished and state.remaining_budget > 0:
+                self._recruit_scheduler.reopen_player(self.player_id)
+            return
+        self._legacy_waiting = value
 
     # =========================================================
     # GOLD
@@ -138,36 +190,47 @@ class Player:
         self.gold -= amount
 
     # =========================================================
-    # AP
+    # LEGACY AP API
     # =========================================================
 
     def set_ap(self, amount):
-        """Set the player's AP."""
+        """Set remaining interaction budget through the legacy AP API."""
 
+        amount = int(amount)
         if amount < 0:
             raise ValueError(
                 "AP cannot be negative."
             )
 
-        self.ap = amount
+        if self._has_scheduler_state():
+            self._recruit_scheduler.set_remaining_budget(self.player_id, amount)
+        else:
+            self._legacy_ap = amount
+            if amount > 0:
+                self._legacy_waiting = False
 
     def spend_ap(self, amount=1):
-        """Spend AP."""
+        """Consume interaction budget through the legacy AP API."""
 
+        amount = int(amount)
         if amount < 0:
             raise ValueError(
                 "Cannot spend negative AP."
             )
 
-        if self.ap < amount:
+        if self._has_scheduler_state():
+            self._recruit_scheduler.consume_budget(self.player_id, amount)
+            return
+
+        if self._legacy_ap < amount:
             raise ValueError(
                 "Not enough AP."
             )
 
-        self.ap -= amount
+        self._legacy_ap -= amount
 
-        if self.ap == 0:
-            self.waiting = True
+        if self._legacy_ap == 0:
+            self._legacy_waiting = True
 
     # =========================================================
     # HERO
@@ -299,9 +362,11 @@ class Player:
     # RECRUIT STATE
     # =========================================================
 
-    def reset_for_recruit_phase(self, gold, ap):
-        """
-        Reset player state for a new recruit phase.
+    def reset_for_recruit_phase(self, gold, ap=None):
+        """Reset Hearthstone recruit state for a new phase.
+
+        ``ap`` is accepted only for old callers. Live games initialize the
+        interaction budget in RecruitScheduler before this method is called.
         """
 
         if self.eliminated:
@@ -310,14 +375,22 @@ class Player:
             )
 
         self.set_gold(gold)
-        self.set_ap(ap)
 
-        self.waiting = False
+        if self._has_scheduler_state():
+            # Scheduler.begin_phase already created fresh unfinished state.
+            if ap is not None:
+                self._recruit_scheduler.set_remaining_budget(self.player_id, ap)
+        else:
+            self.set_ap(0 if ap is None else ap)
+            self._legacy_waiting = False
 
     def end_turn(self):
-        """Lock the player for the rest of recruitment."""
+        """Finish this seat's recruit phase."""
 
-        self.waiting = True
+        if self._has_scheduler_state():
+            self._recruit_scheduler.finish_player(self.player_id, "end_turn")
+        else:
+            self._legacy_waiting = True
 
     # =========================================================
     # TAVERN
@@ -357,7 +430,6 @@ class Player:
         self.last_opponent_id = opponent_id
 
     def snapshot_combat_board(self):
-        
         """
         Save the exact board the player is entering combat with.
 
@@ -369,7 +441,7 @@ class Player:
         )
 
         return deepcopy(
-        self.last_combat_board
+            self.last_combat_board
         )
 
     def get_last_combat_board(self):
@@ -397,8 +469,12 @@ class Player:
 
         self.eliminated = True
 
-        self.waiting = True
-        self.ap = 0
+        if self._has_scheduler_state():
+            self._recruit_scheduler.set_remaining_budget(self.player_id, 0)
+            self._recruit_scheduler.finish_player(self.player_id, "eliminated")
+        else:
+            self._legacy_waiting = True
+            self._legacy_ap = 0
 
         if placement is not None:
             self.set_placement(
@@ -432,6 +508,10 @@ class Player:
             for minion in self.board
         )
 
+        logical_time = None
+        if self._has_scheduler_state():
+            logical_time = self._recruit_scheduler.logical_time(self.player_id)
+
         return (
             f"Player("
             f"id={self.player_id}, "
@@ -439,13 +519,14 @@ class Player:
             f"health={self.health}, "
             f"armor={self.armor}, "
             f"gold={self.gold}, "
-            f"ap={self.ap}, "
+            f"interaction_budget={self.ap}, "
+            f"logical_time={logical_time}, "
             f"tavern_tier={self.tavern_tier}, "
             f"board={board_count}/"
             f"{self.MAX_BOARD_SIZE}, "
             f"hand={len(self.hand)}/"
             f"{self.MAX_HAND_SIZE}, "
-            f"waiting={self.waiting}, "
+            f"finished={self.waiting}, "
             f"eliminated={self.eliminated}, "
             f"placement={self.placement}, "
             f"last_opponent={self.last_opponent_id}"
