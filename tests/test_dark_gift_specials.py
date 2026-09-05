@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from game.bob import Bob
-from game.combat import CombatEngine
 from game.dark_gift_effects import (
     DEMONOLOGY,
     DOUBLE_VISION,
@@ -55,7 +54,6 @@ def _host(card_id=900100, **updates):
 def test_double_vision_generates_plain_extra_copy_after_selected_minion_enters_hand():
     game = _game()
     player = game.get_player(0)
-    host = _host(card_id=120031)
     # Use a real card ID so the generated plain copy can come from the card DB.
     host = game.effects.create_card(120031, generated=False)
     attach_dark_gift(game.effects, 0, host, _gift(game, DOUBLE_VISION), acquired_turn=8)
@@ -133,6 +131,11 @@ def test_tarecgosa_blessing_persists_double_positive_combat_gains_to_real_board_
     player = game.get_player(0)
     host = _host()
     attach_dark_gift(game.effects, 0, host, _gift(game, TARECGOSAS_BLESSING), acquired_turn=8)
+
+    # Real Combat._snapshot_boards() tags every persistent board minion before
+    # CombatEngine receives its copied combat side. Mirror that production
+    # boundary here because this unit test constructs the side directly.
+    host["_persistent_board_index"] = 0
     player.board[0] = host
 
     engine = game.combat.engine
