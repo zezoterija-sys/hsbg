@@ -45,12 +45,20 @@ class Action:
     effect_target_idx: Optional[int] = None
 
     @property
-    def ap_cost(self) -> int:
-        # Choice resolution is part of the action that opened the choice; it
-        # must remain resolvable even if that action spent the player's last AP.
+    def interaction_cost(self) -> int:
+        """Artificial recruit-scheduler cost, not a Hearthstone resource."""
+
+        # Mandatory choice resolution is a continuation of the interaction that
+        # opened it. END_TURN only marks a seat finished.
         if self.action_type in (ActionType.END_TURN, ActionType.CHOOSE_OPTION):
             return 0
         return 1
+
+    @property
+    def ap_cost(self) -> int:
+        """Backward-compatible alias for old traces/tests."""
+
+        return self.interaction_cost
 
     def __repr__(self) -> str:
         parts = [self.action_type.value]
@@ -117,6 +125,14 @@ class ActionSpace:
             return hero.get("power")
         return None
 
+    @staticmethod
+    def _recruit_scheduler(game_state):
+        scheduler = getattr(game_state, "scheduler", None)
+        if scheduler is not None:
+            return scheduler
+        recruitment = getattr(game_state, "recruitment", None)
+        return getattr(recruitment, "scheduler", None)
+
     def generate_for_player(self, player: Any, game_state: Any):
         self.reset()
 
@@ -129,8 +145,8 @@ class ActionSpace:
             None,
         )
 
-        # Mandatory choices must remain resolvable even when the
-        # action that opened them spent the player's final AP.
+        # Mandatory choices must remain resolvable even after the scheduler
+        # budget reaches zero because they are continuations of paid actions.
         if effects is not None:
             pending = effects.get_pending_choice(
                 player.player_id
@@ -148,13 +164,21 @@ class ActionSpace:
                     )
                 return
 
-        if getattr(player, "waiting", False):
-            return
+        scheduler = self._recruit_scheduler(game_state)
+        if scheduler is not None and scheduler.has_player(player.player_id):
+            if scheduler.is_finished(player.player_id):
+                return
+            interaction_budget = scheduler.remaining_budget(player.player_id)
+        else:
+            # Compatibility path for isolated legacy unit tests that construct a
+            # Player without a live Recruitment/RecruitScheduler.
+            if getattr(player, "waiting", False):
+                return
+            interaction_budget = getattr(player, "ap", 0)
 
         self.add_action(Action(ActionType.END_TURN))
 
-        ap = getattr(player, "ap", 0)
-        if ap <= 0:
+        if interaction_budget <= 0:
             return
 
         gold = getattr(player, "gold", 0)
