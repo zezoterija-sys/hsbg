@@ -12,6 +12,7 @@ from .combat import Combat
 from .effects import EffectSystem
 from .events import EventDispatcher, GameEvent
 from .heroes import HEROES
+from .lobby import roll_active_minion_types
 from .player import Player
 from .pool import CardPool
 from .recruitment import Recruitment
@@ -39,6 +40,10 @@ class Bob:
         self.round_number = 0
         self.phase = None
 
+        # Public live-lobby rule state: five active minion types are rolled for
+        # each normal Solos game before hero selection.
+        self.active_minion_types = roll_active_minion_types(self.random)
+
         # Private deterministic resolution order. This is simulator scheduling
         # state, not information that should be exposed to an AI observation.
         self.priority_order = []
@@ -59,6 +64,7 @@ class Bob:
         self.pool = CardPool(
             cards_file=cards_file,
             rng=self.random,
+            active_minion_types=self.active_minion_types,
         )
 
         # Recruitment creates and exposes self.scheduler.
@@ -88,9 +94,14 @@ class Bob:
         self.events.clear_history()
         self.effects.reset_runtime_state_for_new_game()
 
+        # Minion types are public game state and must be selected before hero
+        # offers and before any Tavern cards are drawn.
+        self.active_minion_types = roll_active_minion_types(self.random)
+
         self.pool = CardPool(
             cards_file=str(self.pool.cards_file),
             rng=self.random,
+            active_minion_types=self.active_minion_types,
         )
 
         self.combat = Combat(
@@ -108,11 +119,13 @@ class Bob:
             GameEvent.GAME_START,
             source=self,
             player_count=self.PLAYER_COUNT,
+            active_minion_types=self.active_minion_types,
         )
         self.events.emit(
             GameEvent.HERO_SELECTION_START,
             source=self,
             priority_order=self.priority_order.copy(),
+            active_minion_types=self.active_minion_types,
         )
 
         self.prepare_hero_selection()
@@ -804,12 +817,13 @@ class Bob:
     # =========================================================
 
     def get_state(self, *, include_private=False):
-        """Return core global game state without scheduler tie-break information."""
+        """Return public global game state plus optional scheduler internals."""
 
         state = {
             "round": self.round_number,
             "phase": self.phase,
             "game_over": self.game_over,
+            "active_minion_types": self.active_minion_types,
             "alive_player_ids": [
                 player.player_id for player in self.get_alive_players()
             ],
