@@ -1,4 +1,10 @@
-"""Generate AI-safe imitation samples from the generic seed teacher."""
+"""Generate imitation and hero-outcome samples from the generic seed teacher.
+
+The teacher uses only real Bob states and legal actions. Recruit samples train
+only Brain B's policy prior. Hero choices are deliberately RANDOM during data
+generation so completed-game outcomes can train an unbiased first-pass hero
+preference model without a hand-authored hero tier list.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +19,44 @@ from game.bob import Bob
 from training.teacher_policy import BasicTeacherPolicy
 
 
+TEACHER_DATA_VERSION = 2
+
+
 @dataclass(frozen=True)
 class TeacherSample:
     observation: AgentObservation
     legal_actions: tuple[Action, ...]
     policy_target: tuple[float, ...]
+
+    game_id: str = ""
+    game_seed: int = 0
+    player_id: int = -1
+    round_number: int = 0
+    decision_type: str = "recruit"
+    chosen_action: Action | None = None
+
+
+@dataclass(frozen=True)
+class HeroTeacherSample:
+    """One randomly explored hero choice plus its eventual placement value."""
+
+    game_id: str
+    game_seed: int
+    player_id: int
+    offered_hero_ids: tuple[int, ...]
+    chosen_hero_id: int
+    final_placement: int
+    final_value: float
+
+
+@dataclass(frozen=True)
+class TeacherDataset:
+    recruit_samples: tuple[TeacherSample, ...]
+    hero_samples: tuple[HeroTeacherSample, ...]
+    game_seeds: tuple[int, ...]
+
+    def __len__(self) -> int:
+        return len(self.recruit_samples)
 
 
 @dataclass(frozen=True)
@@ -32,6 +71,19 @@ class TeacherDataConfig:
             raise ValueError("max_action_batches_per_round must be positive.")
         if self.max_rounds_per_game <= 0:
             raise ValueError("max_rounds_per_game must be positive.")
+
+
+@dataclass(frozen=True)
+class _HeroChoiceRecord:
+    player_id: int
+    offered_hero_ids: tuple[int, ...]
+    chosen_hero_id: int
+
+
+@dataclass(frozen=True)
+class _GeneratedGame:
+    recruit_samples: tuple[TeacherSample, ...]
+    hero_samples: tuple[HeroTeacherSample, ...]
 
 
 class TeacherDataGenerator:
@@ -49,23 +101,49 @@ class TeacherDataGenerator:
         self.policy = policy or BasicTeacherPolicy()
 
     def generate_games(self, games: int) -> list[TeacherSample]:
+        """Backward-compatible API returning recruit-policy samples only."""
+        return list(self.generate_dataset(games).recruit_samples)
+
+    def generate_dataset(self, games: int) -> TeacherDataset:
         if games <= 0:
             raise ValueError("games must be positive.")
 
-        samples: list[TeacherSample] = []
+        recruit_samples: list[TeacherSample] = []
+        hero_samples: list[HeroTeacherSample] = []
+        game_seeds: list[int] = []
+
         for game_index in range(int(games)):
             game_seed = self._derive_game_seed(game_index)
-            game_samples = self._generate_one_game(game_seed)
-            samples.extend(game_samples)
+            generated = self._generate_one_game(
+                game_seed=game_seed,
+                game_index=game_index,
+            )
+            game_seeds.append(game_seed)
+            recruit_samples.extend(generated.recruit_samples)
+            hero_samples.extend(generated.hero_samples)
+
             print(
                 f"Teacher game {game_index + 1}/{games} | "
-                f"samples: {len(game_samples)} | total: {len(samples)}",
+                f"recruit samples: {len(generated.recruit_samples)} | "
+                f"hero samples: {len(generated.hero_samples)} | "
+                f"total recruit: {len(recruit_samples)}",
                 flush=True,
             )
-        return samples
 
-    def _generate_one_game(self, game_seed: int) -> list[TeacherSample]:
+        return TeacherDataset(
+            recruit_samples=tuple(recruit_samples),
+            hero_samples=tuple(hero_samples),
+            game_seeds=tuple(game_seeds),
+        )
+
+    def _generate_one_game(
+        self,
+        *,
+        game_seed: int,
+        game_index: int,
+    ) -> _GeneratedGame:
         rng = random.Random(game_seed)
+        game_id = f"teacher-{int(game_index):05d}-seed-{int(game_seed)}"
 
         with self._global_random_scope(game_seed):
             game = Bob(cards_file=self.config.cards_file)
@@ -77,7 +155,7 @@ class TeacherDataGenerator:
                 for player_id in range(self.PLAYER_COUNT)
             }
 
-            self._choose_heroes(game, rng)
+            hero_records = self._choose_heroes_randomly(game, rng)
 
             samples: list[TeacherSample] = []
             current_round = 0
@@ -109,7 +187,9 @@ class TeacherDataGenerator:
                         for player_id in range(self.PLAYER_COUNT)
                     }
                     if current_round > self.config.max_rounds_per_game:
-                        raise RuntimeError("Teacher game exceeded round safety limit.")
+                        raise RuntimeError(
+                            "Teacher game exceeded round safety limit."
+                        )
 
                 if batches_this_round >= self.config.max_action_batches_per_round:
                     raise RuntimeError(
@@ -128,11 +208,19 @@ class TeacherDataGenerator:
 
                 for player_id in order:
                     player = game.get_player(player_id)
-                    if player.eliminated or player.waiting:
+                    if player.eliminated:
                         continue
 
                     legal = tuple(game.get_player_action_space(player_id))
                     if not legal:
+                        continue
+
+                    # A final-AP action may create a mandatory zero-AP choice
+                    # while Player.waiting is already true. Do not strand it.
+                    if player.waiting and not any(
+                        getattr(action.action_type, "value", "") == "choose_option"
+                        for action in legal
+                    ):
                         continue
 
                     observation = builders[player_id].build(game)
@@ -159,6 +247,12 @@ class TeacherDataGenerator:
                             observation=observation,
                             legal_actions=legal,
                             policy_target=decision.policy_target,
+                            game_id=game_id,
+                            game_seed=int(game_seed),
+                            player_id=int(player_id),
+                            round_number=int(current_round),
+                            decision_type="recruit",
+                            chosen_action=decision.action,
                         )
                     )
                     submissions.append((player_id, decision.action))
@@ -180,15 +274,87 @@ class TeacherDataGenerator:
 
                 batches_this_round += 1
 
-            return samples
+            hero_samples = self._finalize_hero_samples(
+                game=game,
+                records=hero_records,
+                game_id=game_id,
+                game_seed=game_seed,
+            )
+
+            return _GeneratedGame(
+                recruit_samples=tuple(samples),
+                hero_samples=tuple(hero_samples),
+            )
 
     @staticmethod
-    def _choose_heroes(game: Bob, rng: random.Random) -> None:
+    def _choose_heroes_randomly(
+        game: Bob,
+        rng: random.Random,
+    ) -> tuple[_HeroChoiceRecord, ...]:
+        """
+        Choose heroes uniformly from each legal offer.
+
+        Random assignment is deliberate: it supplies exploratory outcome data
+        without injecting a hand-written hero tier list into Brain B.
+        """
+        records: list[_HeroChoiceRecord] = []
         for player_id in tuple(game.priority_order):
-            choices = tuple(game.get_player(player_id).hero_choices)
+            choices = tuple(
+                int(hero_id)
+                for hero_id in game.get_player(player_id).hero_choices
+            )
             if not choices:
                 raise RuntimeError("Hero selection offered no choices.")
-            game.choose_hero(player_id, rng.choice(choices))
+            chosen = int(rng.choice(choices))
+            records.append(
+                _HeroChoiceRecord(
+                    player_id=int(player_id),
+                    offered_hero_ids=choices,
+                    chosen_hero_id=chosen,
+                )
+            )
+            game.choose_hero(player_id, chosen)
+        return tuple(records)
+
+    @staticmethod
+    def _finalize_hero_samples(
+        *,
+        game: Bob,
+        records: Sequence[_HeroChoiceRecord],
+        game_id: str,
+        game_seed: int,
+    ) -> tuple[HeroTeacherSample, ...]:
+        result: list[HeroTeacherSample] = []
+        for record in records:
+            player = game.get_player(record.player_id)
+            placement = getattr(player, "placement", None)
+            if placement is None:
+                raise RuntimeError(
+                    "Teacher game ended without final placement for "
+                    f"player {record.player_id}."
+                )
+            placement = int(placement)
+            value = TeacherDataGenerator.placement_value(placement)
+            result.append(
+                HeroTeacherSample(
+                    game_id=game_id,
+                    game_seed=int(game_seed),
+                    player_id=record.player_id,
+                    offered_hero_ids=record.offered_hero_ids,
+                    chosen_hero_id=record.chosen_hero_id,
+                    final_placement=placement,
+                    final_value=value,
+                )
+            )
+        return tuple(result)
+
+    @staticmethod
+    def placement_value(placement: int) -> float:
+        """Same linear 1st=+1, 8th=-1 placement scale used by self-play."""
+        placement = int(placement)
+        if not 1 <= placement <= 8:
+            raise ValueError("placement must be between 1 and 8.")
+        return 1.0 - 2.0 * float(placement - 1) / 7.0
 
     @staticmethod
     def _seed_game_components(game: Bob, rng: random.Random) -> None:

@@ -42,6 +42,7 @@ class NeuralMCTSAgent(BaseAgent):
         seed: int | None = None,
         training_mode: bool = True,
         training_temperature: float = 1.0,
+        hero_temperature: float = 1.0,
     ) -> None:
         super().__init__(
             player_id=player_id,
@@ -53,6 +54,10 @@ class NeuralMCTSAgent(BaseAgent):
         if training_temperature < 0:
             raise ValueError(
                 "training_temperature cannot be negative."
+            )
+        if hero_temperature < 0:
+            raise ValueError(
+                "hero_temperature cannot be negative."
             )
 
         self.environment = environment
@@ -68,9 +73,49 @@ class NeuralMCTSAgent(BaseAgent):
         self.training_temperature = float(
             training_temperature
         )
+        self.hero_temperature = float(hero_temperature)
 
         self.last_search: PUCTSearchResult | None = None
         self._last_policy_target: tuple[float, ...] | None = None
+
+    def choose_hero(
+        self,
+        hero_choices: Sequence[int],
+    ) -> int:
+        choices = tuple(int(hero_id) for hero_id in hero_choices)
+        if not choices:
+            raise ValueError("hero_choices cannot be empty.")
+        if len(choices) == 1:
+            return choices[0]
+
+        evaluation = self.brain.evaluate_heroes(choices)
+        scores = tuple(float(value) for value in evaluation.scores)
+
+        # Evaluation mode is deterministic except for exact learned ties.
+        if not self.training_mode or self.hero_temperature == 0.0:
+            best = max(scores)
+            indices = [
+                index for index, value in enumerate(scores)
+                if value == best
+            ]
+            return choices[self.rng.choice(indices)]
+
+        # Training mode retains exploration. Before hero learning all scores are
+        # exactly zero, so this reduces to uniform random selection.
+        import math
+
+        temperature = max(1e-6, self.hero_temperature)
+        scaled = [value / temperature for value in scores]
+        offset = max(scaled)
+        weights = [math.exp(value - offset) for value in scaled]
+        total = sum(weights)
+        threshold = self.rng.random() * total
+        cumulative = 0.0
+        for hero_id, weight in zip(choices, weights):
+            cumulative += weight
+            if cumulative >= threshold:
+                return hero_id
+        return choices[-1]
 
     def choose_action(
         self,

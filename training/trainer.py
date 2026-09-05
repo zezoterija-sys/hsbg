@@ -397,6 +397,16 @@ class NeuralMCTSTrainer:
         payload = {
             "checkpoint_version": self.CHECKPOINT_VERSION,
             "model_state_dict": self.brain.model.state_dict(),
+            "hero_selector_state_dict": (
+                self.brain.hero_selector.state_dict()
+                if hasattr(self.brain, "hero_selector")
+                else None
+            ),
+            "hero_selector_schema_version": (
+                int(getattr(self.brain.hero_selector, "SCHEMA_VERSION", 1))
+                if hasattr(self.brain, "hero_selector")
+                else None
+            ),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "training_steps_completed": self.training_steps_completed,
             "teacher_steps_completed": self.teacher_steps_completed,
@@ -427,6 +437,12 @@ class NeuralMCTSTrainer:
         self._validate_checkpoint(payload)
 
         self.brain.model.load_state_dict(payload["model_state_dict"])
+
+        hero_state = payload.get("hero_selector_state_dict")
+        if hero_state is not None and hasattr(self.brain, "hero_selector"):
+            self.brain.hero_selector.load_state_dict(hero_state)
+            self.brain.hero_selector.eval()
+
         self.optimizer.load_state_dict(payload["optimizer_state_dict"])
         self.training_steps_completed = int(payload.get("training_steps_completed", 0))
         self.teacher_steps_completed = int(payload.get("teacher_steps_completed", 0))

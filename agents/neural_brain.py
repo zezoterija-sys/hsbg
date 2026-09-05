@@ -8,6 +8,7 @@ from typing import Sequence
 import torch
 
 from agents.action_encoder import ActionEncoder
+from agents.hero_selector import HeroEvaluation, HeroSelector
 from agents.observation import AgentObservation
 from agents.observation_encoder import CardVocabulary, EncodedObservation, ObservationEncoder
 from game.actions import Action
@@ -44,6 +45,15 @@ class NeuralBrain:
         )
         self.model.to(self.device)
         self.model.eval()
+
+        # Hero selection is learned separately from the recruit policy/value
+        # network. This keeps teacher-game placement outcomes out of the main
+        # state-value head while still allowing Brain B to learn hero choice.
+        self.hero_selector = HeroSelector(
+            card_vocab_size=len(self.vocabulary)
+        ).to(self.device)
+        self.hero_selector.eval()
+
         self.replay_buffer = replay_buffer if replay_buffer is not None else ReplayBuffer(
             seed=replay_seed
         )
@@ -140,8 +150,34 @@ class NeuralBrain:
             )
         return tuple(result)
 
+    @torch.inference_mode()
+    def evaluate_heroes(
+        self,
+        hero_ids: Sequence[int],
+    ) -> HeroEvaluation:
+        choices = tuple(int(hero_id) for hero_id in hero_ids)
+        if not choices:
+            raise ValueError("hero_ids cannot be empty.")
+
+        vocab_ids = tuple(
+            self.vocabulary.encode(hero_id)
+            for hero_id in choices
+        )
+        self.hero_selector.eval()
+        scores = self.hero_selector.evaluate_indices(
+            vocab_ids,
+            device=self.device,
+        )
+        return HeroEvaluation(
+            hero_ids=choices,
+            scores=scores,
+        )
+
     def model_parameters(self):
         return self.model.parameters()
+
+    def hero_parameters(self):
+        return self.hero_selector.parameters()
 
     def state_dict(self):
         return self.model.state_dict()
