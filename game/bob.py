@@ -9,6 +9,7 @@ import random
 from .actions import ActionType
 from .card_effects import register_card_effects
 from .combat import Combat
+from .dark_gifts import DarkGiftSystem
 from .effects import EffectSystem
 from .events import EventDispatcher, GameEvent
 from .heroes import HEROES
@@ -67,6 +68,10 @@ class Bob:
             active_minion_types=self.active_minion_types,
         )
 
+        # Season 14 global Dark Discovery lifecycle. Individual Gift behavior
+        # remains ordinary attachment-driven EffectSystem logic.
+        self.dark_gifts = DarkGiftSystem(self)
+
         # Recruitment creates and exposes self.scheduler.
         self.recruitment = Recruitment(self)
 
@@ -93,6 +98,7 @@ class Bob:
 
         self.events.clear_history()
         self.effects.reset_runtime_state_for_new_game()
+        self.dark_gifts.reset()
 
         # Minion types are public game state and must be selected before hero
         # offers and before any Tavern cards are drawn.
@@ -452,6 +458,8 @@ class Bob:
                 action.target_idx,
                 target_ref=target_ref,
             )
+        elif action_type == ActionType.DARK_GIFT:
+            self.dark_gifts.use(player_id)
         elif action_type == ActionType.CHOOSE_OPTION:
             self.effects.resolve_choice(player_id, action.option_idx)
         elif action_type == ActionType.REFRESH:
