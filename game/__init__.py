@@ -1,17 +1,14 @@
-"""
-Game module for Hearthstone Battlegrounds
-"""
-from .board import GameBoard, GameState
-from .minion import Minion, MinionType
-from .heroes import HEROES
+"""Core Hearthstone Battlegrounds simulator package."""
+
 from .actions import Action, ActionType
+from .bob import Bob
+from .player import Player
+from .pool import CardPool
 
 __all__ = [
-    "GameBoard",
-    "GameState",
-    "Minion",
-    "MinionType",
-    "HEROES",
     "Action",
     "ActionType",
+    "Bob",
+    "Player",
+    "CardPool",
 ]
