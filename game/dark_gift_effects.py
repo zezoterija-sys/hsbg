@@ -2,13 +2,13 @@
 
 Dark Gifts are attached effect identities. The physical minion remains the
 ``EffectContext.source`` while ``effect_state`` is the Gift attachment, so the
-normal effect registry can resolve Gift triggers in hand, recruit, and combat.
+normal effect registry resolves Gift triggers in hand, recruit, and combat.
 
-A handful of Gifts require small generic engine hooks (durable Divine Shield,
-combat persistence, special Reborn, permanent Spellcraft, and Fodder refresh
-injection). This module marks those requirements on the physical minion; the
-corresponding engine hooks are intentionally generic rather than card-name
-special cases.
+The unusual Gifts are implemented through generic event capabilities instead
+of card-name branches inside CombatEngine: durable Divine Shield reacts to
+shield-loss events, special Reborn reacts to REBORN, combat persistence diffs
+back to the persistent board copy, and permanent Spellcraft uses pre/post spell
+resolution bookkeeping.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from .effects import EffectZone, TriggerFamily
 from .events import GameEvent
 
 
-# Primary Gift IDs plus their early/late variants.
 SUNKEN_PERSISTENCE = 133310
 HARPYS_TALONS = 132279
 JAWS_OF_DEATH = 132443
@@ -132,6 +131,7 @@ def _ensure_registered(effects) -> None:
     if getattr(effects, "_dark_gift_effects_registered", False):
         return
     register_dark_gift_effects(effects)
+    _register_global_dark_gift_hooks(effects)
     effects._dark_gift_effects_registered = True
 
 
@@ -210,7 +210,7 @@ def attach_dark_gift(
         # "Immune while attacking".
         effects.grant_keyword(minion, "Immune")
     elif gift_id == TORETHS_BLESSING:
-        minion["_dark_gift_divine_shield_hits"] = 3
+        attached["_shield_hits_remaining"] = 3
     elif gift_id == TARECGOSAS_BLESSING:
         minion["_dark_gift_tarecgosa_persistence"] = True
     elif gift_id == SUNKEN_PERSISTENCE:
@@ -218,11 +218,7 @@ def attach_dark_gift(
 
     count, amount = _history_value(effects, player_id, gift_id)
     if count and amount:
-        effects.apply_buff(
-            minion,
-            attack=count * amount,
-            health=count * amount,
-        )
+        effects.apply_buff(minion, attack=count * amount, health=count * amount)
 
     if gift_id == STEADY_GROWTH:
         # Final 36.2.2 values by offering/acquisition turn.
@@ -239,31 +235,17 @@ def attach_dark_gift(
 
 
 def after_dark_gift_acquired(effects, player_id: int, minion: dict, gift: dict) -> None:
-    """Resolve acquisition effects after the selected minion is safely in hand."""
-
-    if int(gift.get("id", -1)) != DOUBLE_VISION:
-        return
-
-    # "Get an extra copy of this." The extra copy is generated rather than
-    # taken from the shared Tavern pool. If the selected minion used the final
-    # hand slot, the normal hand-size rule simply prevents the bonus copy.
-    effects.add_generated_to_hand(player_id, int(minion["id"]))
+    """Compatibility helper; Double Vision is resolved by CARD_ADDED_TO_HAND."""
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Generic helpers for triggered Gifts
+# Generic helpers
 # ---------------------------------------------------------------------------
 
 
 def _same_player(ctx) -> bool:
     return ctx.event.get("player_id") == ctx.source_player_id
-
-
-def _friendly_board(ctx):
-    if ctx.source_side is not None:
-        return ctx.source_side.board
-    player = ctx.get_player()
-    return player.board if player is not None else []
 
 
 def _real_types(system, card: dict) -> list[str]:
@@ -319,6 +301,44 @@ def _most_common_type(ctx) -> str | None:
     return None
 
 
+def _find_attachment(card: dict, gift_id: int) -> dict | None:
+    for attachment in card.get("_attachments", ()):
+        if isinstance(attachment, dict) and attachment.get("id") == gift_id:
+            return attachment
+    return None
+
+
+def _persistent_board_card(ctx):
+    index = ctx.source.get("_persistent_board_index")
+    if index is None or ctx.source_player_id is None:
+        return None
+    player = ctx.game.get_player(ctx.source_player_id)
+    if not 0 <= int(index) < len(player.board):
+        return None
+    card = player.board[int(index)]
+    if not isinstance(card, dict):
+        return None
+    if card.get("id") != ctx.source.get("id"):
+        return None
+    return card
+
+
+def _track_combat_max_health(ctx, key: str) -> None:
+    if ctx.event.event_type == GameEvent.COMBAT_START:
+        ctx.effect_state[key] = max(1, int(ctx.source.get("health", 1) or 1))
+        ctx.effect_state[f"{key}_damage"] = 0
+        return
+    if ctx.event.event_type != GameEvent.MINION_DAMAGED:
+        return
+    if ctx.event.get("minion") is not ctx.source:
+        return
+    damage_key = f"{key}_damage"
+    damage = int(ctx.effect_state.get(damage_key, 0) or 0) + int(ctx.event.get("amount", 0) or 0)
+    ctx.effect_state[damage_key] = damage
+    reconstructed = int(ctx.source.get("health", 0) or 0) + damage
+    ctx.effect_state[key] = max(int(ctx.effect_state.get(key, 0) or 0), reconstructed)
+
+
 # ---------------------------------------------------------------------------
 # Trigger handlers
 # ---------------------------------------------------------------------------
@@ -363,6 +383,15 @@ def _incubation(ctx):
     ctx.effect_state["_incubation_doubled"] = True
 
 
+def _double_vision(ctx):
+    if ctx.event.get("card") is not ctx.source:
+        return
+    if ctx.effect_state.get("_double_vision_resolved"):
+        return
+    ctx.effect_state["_double_vision_resolved"] = True
+    ctx.system.add_generated_to_hand(ctx.source_player_id, int(ctx.source["id"]))
+
+
 def _fresh_perspective(ctx):
     ctx.system.grant_free_refreshes(ctx.source_player_id, 2)
 
@@ -399,8 +428,7 @@ def _affinity(ctx):
         chosen_type = ctx.random_choice(types)
         ctx.effect_state["_affinity_type"] = chosen_type
 
-    candidates = _eligible_generated_minions(ctx.system, chosen_type)
-    chosen = ctx.random_choice(candidates)
+    chosen = ctx.random_choice(_eligible_generated_minions(ctx.system, chosen_type))
     if chosen is not None:
         ctx.system.add_generated_to_hand(ctx.source_player_id, chosen)
 
@@ -437,8 +465,7 @@ def _jaws_of_death(ctx):
 
 
 def _polarization(ctx):
-    candidates = _eligible_generated_minions(ctx.system, "Mech")
-    chosen = ctx.random_choice(candidates)
+    chosen = ctx.random_choice(_eligible_generated_minions(ctx.system, "Mech"))
     if chosen is None:
         return
     magnetic = ctx.system.create_card(int(chosen["id"]), generated=True)
@@ -455,9 +482,7 @@ def _demonology(ctx):
     if not _same_player(ctx):
         return
     state = ctx.player_state()
-    state["dark_gift_fodder_refreshes"] = int(
-        state.get("dark_gift_fodder_refreshes", 0) or 0
-    ) + 3
+    state["dark_gift_fodder_refreshes"] = int(state.get("dark_gift_fodder_refreshes", 0) or 0) + 3
 
 
 def _history_growth(ctx, family: TriggerFamily, amount: int):
@@ -502,11 +527,7 @@ def _spell_siphon_late(ctx):
 
 
 def _transcendence(ctx):
-    ctx.buff(
-        ctx.source,
-        attack=2 * int(ctx.source.get("attack", 0) or 0),
-        health=2 * int(ctx.source.get("health", 0) or 0),
-    )
+    ctx.buff(ctx.source, attack=2 * int(ctx.source.get("attack", 0) or 0), health=2 * int(ctx.source.get("health", 0) or 0))
 
 
 def _resistance(ctx):
@@ -524,8 +545,7 @@ def _admiration(ctx):
     index = side.board.index(ctx.source)
     if index <= 0:
         return
-    left = side.board[index - 1]
-    ctx.buff(ctx.source, attack=int(left.get("attack", 0) or 0))
+    ctx.buff(ctx.source, attack=int(side.board[index - 1].get("attack", 0) or 0))
 
 
 def _charisma(ctx):
@@ -543,60 +563,232 @@ def _offensive_sacrifice(ctx):
     side = ctx.source_side
     if side is None:
         return
-    friendly = [card for card in side.board if isinstance(card, dict)]
-    target = ctx.random_choice(friendly)
+    target = ctx.random_choice([card for card in side.board if isinstance(card, dict)])
     if target is not None:
         ctx.buff(target, attack=max(0, int(ctx.source.get("attack", 0) or 0)))
+
+
+def _defensive_track(ctx):
+    _track_combat_max_health(ctx, "_defensive_max_health")
 
 
 def _defensive_sacrifice(ctx):
     side = ctx.source_side
     if side is None:
         return
-    friendly = [card for card in side.board if isinstance(card, dict)]
-    target = ctx.random_choice(friendly)
+    target = ctx.random_choice([card for card in side.board if isinstance(card, dict)])
     if target is not None:
-        maximum = int(
-            ctx.source.get(
-                "_combat_max_health",
-                max(0, int(ctx.source.get("health", 0) or 0)),
-            )
-            or 0
-        )
-        ctx.buff(target, health=max(0, maximum))
+        ctx.buff(target, health=max(0, int(ctx.effect_state.get("_defensive_max_health", 0) or 0)))
+
+
+def _golemancy_track(ctx):
+    _track_combat_max_health(ctx, "_golemancy_max_health")
 
 
 def _golemancy(ctx):
     attack = max(0, int(ctx.source.get("attack", 0) or 0))
-    health = max(
-        1,
-        int(ctx.source.get("_combat_max_health", ctx.source.get("health", 1)) or 1),
+    health = max(1, int(ctx.effect_state.get("_golemancy_max_health", 1) or 1))
+    ctx.summon(
+        {
+            "id": -132835,
+            "name": "Dark Gift Golem",
+            "cardType": "minion",
+            "attack": attack,
+            "health": health,
+            "tier": 1,
+            "keywords": [],
+            "minionTypes": [],
+            "_generated": True,
+        }
     )
-    golem = {
-        "id": -132835,
-        "name": "Dark Gift Golem",
-        "cardType": "minion",
-        "attack": attack,
-        "health": health,
-        "tier": 1,
-        "keywords": [],
-        "minionTypes": [],
-        "_generated": True,
+
+
+def _toreth_shield(ctx):
+    if ctx.event.get("minion") is not ctx.source:
+        return
+    remaining = int(ctx.effect_state.get("_shield_hits_remaining", 3) or 0)
+    if remaining <= 0:
+        return
+    remaining -= 1
+    ctx.effect_state["_shield_hits_remaining"] = remaining
+    if remaining > 0:
+        ctx.source["_combat_divine_shield"] = True
+
+
+def _persisting_track(ctx):
+    _track_combat_max_health(ctx, "_persisting_full_health")
+
+
+def _persisting_reborn(ctx):
+    if ctx.event.get("minion") is not ctx.source:
+        return
+    full_health = max(1, int(ctx.effect_state.get("_persisting_full_health", 1) or 1))
+    ctx.source["health"] = full_health
+
+
+def _tarecgosa_start(ctx):
+    ctx.effect_state["_tarec_start_attack"] = int(ctx.source.get("attack", 0) or 0)
+    ctx.effect_state["_tarec_start_health"] = int(ctx.source.get("health", 0) or 0)
+    ctx.effect_state["_tarec_start_keywords"] = tuple(str(value) for value in ctx.source.get("keywords", ()))
+    ctx.effect_state["_tarec_damage"] = 0
+    ctx.effect_state["_tarec_max_health"] = int(ctx.source.get("health", 0) or 0)
+    ctx.effect_state["_tarec_persisted"] = False
+
+
+def _tarecgosa_damage(ctx):
+    if ctx.event.get("minion") is not ctx.source:
+        return
+    damage = int(ctx.effect_state.get("_tarec_damage", 0) or 0) + int(ctx.event.get("amount", 0) or 0)
+    ctx.effect_state["_tarec_damage"] = damage
+    reconstructed = int(ctx.source.get("health", 0) or 0) + damage
+    ctx.effect_state["_tarec_max_health"] = max(int(ctx.effect_state.get("_tarec_max_health", 0) or 0), reconstructed)
+
+
+def _persist_tarecgosa(ctx):
+    if ctx.effect_state.get("_tarec_persisted"):
+        return
+    original = _persistent_board_card(ctx)
+    if original is None:
+        return
+
+    start_attack = int(ctx.effect_state.get("_tarec_start_attack", ctx.source.get("attack", 0)) or 0)
+    start_health = int(ctx.effect_state.get("_tarec_start_health", 1) or 1)
+    final_attack = int(ctx.source.get("attack", 0) or 0)
+    damage = int(ctx.effect_state.get("_tarec_damage", 0) or 0)
+    final_max_health = max(
+        int(ctx.effect_state.get("_tarec_max_health", 0) or 0),
+        int(ctx.source.get("health", 0) or 0) + damage,
+    )
+
+    gained_attack = max(0, final_attack - start_attack)
+    gained_health = max(0, final_max_health - start_health)
+    if gained_attack or gained_health:
+        ctx.system.apply_buff(original, attack=2 * gained_attack, health=2 * gained_health)
+
+    start_keywords = {value.casefold() for value in ctx.effect_state.get("_tarec_start_keywords", ())}
+    for keyword in ctx.source.get("keywords", ()):
+        if str(keyword).casefold() not in start_keywords:
+            ctx.system.grant_keyword(original, str(keyword))
+
+    ctx.effect_state["_tarec_persisted"] = True
+
+
+# ---------------------------------------------------------------------------
+# Global post-processing hooks for mechanics that span an event resolution
+# ---------------------------------------------------------------------------
+
+
+def _sunken_source_for_spell(effects, event):
+    player_id = event.get("player_id")
+    spell = event.get("spell") or event.get("card")
+    if player_id is None or not isinstance(spell, dict):
+        return None
+    source_id = spell.get("_spellcraft_source_id")
+    if source_id is None or not spell.get("_spellcraft_temporary", False):
+        return None
+    player = effects.game.get_player(player_id)
+    for card in player.board:
+        if (
+            isinstance(card, dict)
+            and card.get("id") == source_id
+            and card.get("_dark_gift_spellcraft_permanent", False)
+        ):
+            return card
+    return None
+
+
+def _sunken_spell_pre(effects, event):
+    if _sunken_source_for_spell(effects, event) is None:
+        return
+    target = event.get("target")
+    if not isinstance(target, dict):
+        return
+    event.context["_sunken_target"] = target
+    event.context["_sunken_stat_len"] = len(target.get("_temporary_stat_modifiers", ()))
+    event.context["_sunken_keyword_counts"] = {
+        str(keyword): len(info.get("expiries", ()))
+        for keyword, info in target.get("_temporary_keywords", {}).items()
     }
-    ctx.summon(golem)
+
+
+def _sunken_spell_post(effects, event):
+    target = event.context.get("_sunken_target")
+    if not isinstance(target, dict):
+        return
+
+    keep = int(event.context.get("_sunken_stat_len", 0) or 0)
+    modifiers = list(target.get("_temporary_stat_modifiers", ()))
+    if len(modifiers) > keep:
+        # Stats are already applied. Removing only the expiry records converts
+        # newly applied Spellcraft stats into permanent stats.
+        target["_temporary_stat_modifiers"] = modifiers[:keep]
+
+    old_counts = event.context.get("_sunken_keyword_counts", {})
+    temporary = target.get("_temporary_keywords", {})
+    for keyword, info in list(temporary.items()):
+        old_count = int(old_counts.get(str(keyword), 0) or 0)
+        expiries = list(info.get("expiries", ()))
+        if len(expiries) <= old_count:
+            continue
+        info["expiries"] = expiries[:old_count]
+        permanent = target.setdefault("_permanent_keyword_grants", [])
+        if keyword not in permanent:
+            permanent.append(keyword)
+        if not info["expiries"]:
+            temporary.pop(keyword, None)
+
+
+def _demonology_refresh_post(effects, event):
+    player_id = event.get("player_id")
+    if player_id is None:
+        return
+    state = effects.get_player_state(player_id)
+    remaining = int(state.get("dark_gift_fodder_refreshes", 0) or 0)
+    if remaining <= 0:
+        return
+
+    try:
+        fodder = effects.create_card(DEMON_FODDER, generated=True)
+    except KeyError:
+        return
+
+    player = effects.game.get_player(player_id)
+    player.tavern.slots.append(fodder)
+    state["dark_gift_fodder_refreshes"] = remaining - 1
+    effects.events.emit(
+        GameEvent.TAVERN_CARD_APPEARED,
+        player_id=player_id,
+        card=fodder,
+        tavern_slot=len(player.tavern.slots) - 1,
+        dark_gift="Demonology",
+    )
+
+
+def _register_global_dark_gift_hooks(effects) -> None:
+    effects.events.register(GameEvent.SPELL_CAST, lambda event: _sunken_spell_pre(effects, event), order=-1000)
+    effects.events.register(GameEvent.SPELL_CAST, lambda event: _sunken_spell_post(effects, event), order=1000)
+    effects.events.register(GameEvent.TAVERN_REFRESHED, lambda event: _demonology_refresh_post(effects, event), order=1000)
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
 
 
 def register_dark_gift_effects(effects) -> None:
-    """Register every event-driven Season 14 Dark Gift identity."""
+    """Register all event-driven Season 14 Dark Gift identities."""
 
     board = (EffectZone.BOARD,)
+    hand = (EffectZone.HAND,)
     board_hand = (EffectZone.BOARD, EffectZone.HAND)
     board_combat = (EffectZone.BOARD, EffectZone.COMBAT)
+    combat = (EffectZone.COMBAT,)
 
     effects.register_effect(SHARPENED_SWORD, GameEvent.CARD_PLAYED, _sharpened_sword, zones=board, name="Dark Gift: Sharpened Sword")
     effects.register_effect(TOUGHENED_SHIELD, GameEvent.CARD_PLAYED, _toughened_shield, zones=board, name="Dark Gift: Toughened Shield")
     effects.register_effect(DEXTERITY_EARLY, GameEvent.CARD_PLAYED, _dexterity_early, zones=board, name="Dark Gift: Dexterity +2/+2")
     effects.register_effect(DEXTERITY_LATE, GameEvent.CARD_PLAYED, _dexterity_late, zones=board, name="Dark Gift: Dexterity +4/+4")
+    effects.register_effect(DOUBLE_VISION, GameEvent.CARD_ADDED_TO_HAND, _double_vision, zones=hand, name="Dark Gift: Double Vision")
 
     effects.register_end_of_turn(STEADY_GROWTH, _steady_growth, name="Dark Gift: Steady Growth")
     effects.register_effect(INCUBATION, GameEvent.TURN_START, _incubation, zones=board_hand, name="Dark Gift: Incubation")
@@ -626,3 +818,26 @@ def register_dark_gift_effects(effects) -> None:
     effects.register_deathrattle(OFFENSIVE_SACRIFICE, _offensive_sacrifice, name="Dark Gift: Offensive Sacrifice")
     effects.register_deathrattle(DEFENSIVE_SACRIFICE, _defensive_sacrifice, name="Dark Gift: Defensive Sacrifice")
     effects.register_deathrattle(GOLEMANCY, _golemancy, name="Dark Gift: Golemancy")
+
+    # Max-health trackers for effects whose Deathrattles need pre-damage Health.
+    effects.register_effect(DEFENSIVE_SACRIFICE, GameEvent.COMBAT_START, _defensive_track, zones=combat, name="Dark Gift: Defensive max Health start")
+    effects.register_effect(DEFENSIVE_SACRIFICE, GameEvent.MINION_DAMAGED, _defensive_track, zones=combat, name="Dark Gift: Defensive max Health damage")
+    effects.register_effect(GOLEMANCY, GameEvent.COMBAT_START, _golemancy_track, zones=combat, name="Dark Gift: Golemancy max Health start")
+    effects.register_effect(GOLEMANCY, GameEvent.MINION_DAMAGED, _golemancy_track, zones=combat, name="Dark Gift: Golemancy max Health damage")
+
+    # Toreth's Blessing: the ordinary shield breaks three times total.
+    effects.register_effect(TORETHS_BLESSING, GameEvent.DIVINE_SHIELD_LOST, _toreth_shield, zones=combat, name="Dark Gift: Toreth's Blessing")
+
+    # Persisting Horror: normal Reborn plumbing creates the minion, then the
+    # Gift restores its tracked full Health. Other copied bonus keywords are
+    # already preserved by the combat-copy/Reborn path.
+    effects.register_effect(PERSISTING_HORROR, GameEvent.COMBAT_START, _persisting_track, zones=combat, name="Dark Gift: Persisting Horror start")
+    effects.register_effect(PERSISTING_HORROR, GameEvent.MINION_DAMAGED, _persisting_track, zones=combat, name="Dark Gift: Persisting Horror damage")
+    effects.register_effect(PERSISTING_HORROR, GameEvent.REBORN, _persisting_reborn, zones=combat, name="Dark Gift: Persisting Horror Reborn")
+
+    # Tarecgosa's Blessing persists doubled positive combat stat gains and any
+    # newly gained keywords whether the minion survives or dies.
+    effects.register_effect(TARECGOSAS_BLESSING, GameEvent.COMBAT_START, _tarecgosa_start, zones=combat, name="Dark Gift: Tarecgosa start")
+    effects.register_effect(TARECGOSAS_BLESSING, GameEvent.MINION_DAMAGED, _tarecgosa_damage, zones=combat, name="Dark Gift: Tarecgosa damage")
+    effects.register_effect(TARECGOSAS_BLESSING, GameEvent.MINION_DIED, _persist_tarecgosa, zones=(EffectZone.EVENT_SOURCE,), name="Dark Gift: Tarecgosa death persist")
+    effects.register_effect(TARECGOSAS_BLESSING, GameEvent.COMBAT_END, _persist_tarecgosa, zones=combat, name="Dark Gift: Tarecgosa survive persist")
