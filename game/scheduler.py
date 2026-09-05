@@ -1,10 +1,10 @@
 """Recruit-phase simulation scheduling.
 
 This module owns the artificial interaction/time budget used to stop AI agents
-from acting infinitely quickly during a recruit phase.  The budget is simulator
+from acting infinitely quickly during a recruit phase. The budget is simulator
 infrastructure, not a Hearthstone Battlegrounds resource.
 
-Normal player interactions advance a per-seat logical clock.  Seats at the
+Normal player interactions advance a per-seat logical clock. Seats at the
 lowest logical time are eligible to submit the next simultaneous batch.
 Mandatory zero-cost choices are continuations of an already-paid interaction
 and therefore remain resolvable after the interaction budget reaches zero.
@@ -13,7 +13,7 @@ and therefore remain resolvable after the interaction budget reaches zero.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from .actions import Action, ActionType
 
@@ -40,6 +40,7 @@ class RecruitScheduler:
 
         self.interaction_budget = interaction_budget
         self._states: dict[int, RecruitSeatState] = {}
+        self._pending_choice_provider: Callable[[int], bool] | None = None
 
     # ------------------------------------------------------------------
     # Phase lifecycle
@@ -57,6 +58,19 @@ class RecruitScheduler:
 
     def clear(self) -> None:
         self._states.clear()
+
+    def set_pending_choice_provider(
+        self,
+        provider: Callable[[int], bool] | None,
+    ) -> None:
+        """Bind a read-only mandatory-continuation query from the effect system."""
+
+        self._pending_choice_provider = provider
+
+    def has_pending_choice(self, player_id: int) -> bool:
+        if self._pending_choice_provider is None:
+            return False
+        return bool(self._pending_choice_provider(int(player_id)))
 
     def has_player(self, player_id: int) -> bool:
         return int(player_id) in self._states
@@ -81,6 +95,14 @@ class RecruitScheduler:
 
     def is_finished(self, player_id: int) -> bool:
         return self.state_for(player_id).finished
+
+    def is_waiting_compat(self, player_id: int) -> bool:
+        """Old ``Player.waiting`` view without stranding mandatory choices."""
+
+        state = self.state_for(player_id)
+        if not state.finished:
+            return False
+        return not self.has_pending_choice(player_id)
 
     def set_remaining_budget(self, player_id: int, amount: int) -> None:
         """Compatibility hook for old AP-oriented tests/tools."""
@@ -111,9 +133,9 @@ class RecruitScheduler:
         """Return seats allowed to make the next decision.
 
         Pending mandatory choices take precedence because they are continuations
-        of interactions that already resolved.  Otherwise only unfinished seats
-        at the minimum logical time are eligible, which gives us a clean notion
-        of simultaneous recruit actions without exposing the scheduler to agents.
+        of interactions that already resolved. Otherwise only unfinished seats
+        at the minimum logical time are eligible. This gives a clean notion of
+        simultaneous recruit actions without exposing scheduler state to agents.
         """
 
         allowed = (
