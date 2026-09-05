@@ -24,11 +24,15 @@ are deliberately changed.
 
 ## Rules priority
 
-1. Explicit simulator/project design decisions are primary.
-2. Accuracy with the current live Hearthstone Battlegrounds game is a strong
-   secondary priority.
-3. When the simulator intentionally differs from the live game, the difference
-   should be documented rather than silently changed.
+1. Preserve simulator/AI infrastructure that is necessary for execution,
+   determinism, performance, and fair agent interaction.
+2. Within those constraints, match the current live Hearthstone Battlegrounds
+   Solos rules and active content as accurately as practical.
+3. Infrastructure abstractions such as action budgets and collision scheduling
+   are implementation tools, not Hearthstone mechanics, and may be redesigned
+   if their purpose is preserved more cleanly.
+4. Any intentional deviation from the live game should be explicit and
+   documented rather than silently embedded in game rules.
 
 ## Repository hygiene
 
