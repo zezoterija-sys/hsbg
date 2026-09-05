@@ -1,12 +1,12 @@
 """Runtime effects for Season 14 Dark Gifts.
 
-Dark Gifts are attached effect identities.  The physical minion remains the
+Dark Gifts are attached effect identities. The physical minion remains the
 ``EffectContext.source`` while ``effect_state`` is the Gift attachment, so the
 normal effect registry can resolve Gift triggers in hand, recruit, and combat.
 
 A handful of Gifts require small generic engine hooks (durable Divine Shield,
 combat persistence, special Reborn, permanent Spellcraft, and Fodder refresh
-injection).  This module marks those requirements on the physical minion; the
+injection). This module marks those requirements on the physical minion; the
 corresponding engine hooks are intentionally generic rather than card-name
 special cases.
 """
@@ -20,7 +20,7 @@ from .events import GameEvent
 
 
 # Primary Gift IDs plus their early/late variants.
-SUNken_PERSISTENCE = 133310
+SUNKEN_PERSISTENCE = 133310
 HARPYS_TALONS = 132279
 JAWS_OF_DEATH = 132443
 FORTITUDE = 133421
@@ -69,7 +69,7 @@ DEMON_FODDER = 130084
 
 ALL_DARK_GIFT_IDS = frozenset(
     {
-        SUNken_PERSISTENCE,
+        SUNKEN_PERSISTENCE,
         HARPYS_TALONS,
         JAWS_OF_DEATH,
         FORTITUDE,
@@ -128,6 +128,13 @@ def _attachment(gift: dict, acquired_turn: int) -> dict:
     return attached
 
 
+def _ensure_registered(effects) -> None:
+    if getattr(effects, "_dark_gift_effects_registered", False):
+        return
+    register_dark_gift_effects(effects)
+    effects._dark_gift_effects_registered = True
+
+
 def _make_golden_in_place(minion: dict) -> None:
     minion["isGolden"] = True
     minion["golden"] = True
@@ -167,6 +174,7 @@ def attach_dark_gift(
 ) -> dict:
     """Attach one Gift and apply effects that happen immediately on acquisition."""
 
+    _ensure_registered(effects)
     gift_id = int(gift["id"])
     attached = _attachment(gift, acquired_turn)
 
@@ -205,7 +213,7 @@ def attach_dark_gift(
         minion["_dark_gift_divine_shield_hits"] = 3
     elif gift_id == TARECGOSAS_BLESSING:
         minion["_dark_gift_tarecgosa_persistence"] = True
-    elif gift_id == SUNken_PERSISTENCE:
+    elif gift_id == SUNKEN_PERSISTENCE:
         minion["_dark_gift_spellcraft_permanent"] = True
 
     count, amount = _history_value(effects, player_id, gift_id)
@@ -236,8 +244,8 @@ def after_dark_gift_acquired(effects, player_id: int, minion: dict, gift: dict) 
     if int(gift.get("id", -1)) != DOUBLE_VISION:
         return
 
-    # "Get an extra copy of this."  The extra copy is generated rather than
-    # taken from the shared Tavern pool.  If the selected minion used the final
+    # "Get an extra copy of this." The extra copy is generated rather than
+    # taken from the shared Tavern pool. If the selected minion used the final
     # hand slot, the normal hand-size rule simply prevents the bonus copy.
     effects.add_generated_to_hand(player_id, int(minion["id"]))
 
@@ -583,7 +591,6 @@ def register_dark_gift_effects(effects) -> None:
 
     board = (EffectZone.BOARD,)
     board_hand = (EffectZone.BOARD, EffectZone.HAND)
-    combat = (EffectZone.COMBAT,)
     board_combat = (EffectZone.BOARD, EffectZone.COMBAT)
 
     effects.register_effect(SHARPENED_SWORD, GameEvent.CARD_PLAYED, _sharpened_sword, zones=board, name="Dark Gift: Sharpened Sword")
