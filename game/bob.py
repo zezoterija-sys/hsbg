@@ -15,6 +15,7 @@ from .heroes import HEROES
 from .player import Player
 from .pool import CardPool
 from .recruitment import Recruitment
+from .rulesets.patch_36_4_2_effects import register_36_4_2_effect_overrides
 
 
 class Bob:
@@ -53,6 +54,7 @@ class Bob:
             rng=self.random,
         )
         register_card_effects(self.effects)
+        register_36_4_2_effect_overrides(self.effects)
 
         self.pool = CardPool(
             cards_file=cards_file,
