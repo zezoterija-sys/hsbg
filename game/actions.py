@@ -16,6 +16,7 @@ class ActionType(Enum):
     CAST_SPELL = "cast_spell"
     HERO_POWER = "hero_power"
     ACTIVATE = "activate"
+    DARK_GIFT = "dark_gift"
     FREEZE = "freeze"
     UNFREEZE = "unfreeze"
     UPGRADE_TAVERN = "upgrade_tavern"
@@ -180,6 +181,13 @@ class ActionSpace:
         hand = getattr(player, "hand", [])
         board = getattr(player, "board", [])
         tavern = getattr(player, "tavern", None)
+
+        # -----------------------------------------------------
+        # DARK DISCOVERY / DARK GIFT
+        # -----------------------------------------------------
+        dark_gifts = getattr(game_state, "dark_gifts", None)
+        if dark_gifts is not None and dark_gifts.can_use(player.player_id):
+            self.add_action(Action(ActionType.DARK_GIFT))
 
         # -----------------------------------------------------
         # REFRESH
