@@ -6,7 +6,8 @@ The pool contains the actual available copies of cards.
 Card definitions come from cards.json.
 Each available pool entry is an independent card copy.
 
-Minions and Tavern spells use different copy counts.
+This simulator targets Battlegrounds Solos: Duos-only cards are excluded while
+Solos-only cards are explicitly allowed.
 """
 
 import json
@@ -36,8 +37,9 @@ class CardPool:
         6: 7,
     }
 
-    def __init__(self, cards_file="data/raw/cards.json"):
+    def __init__(self, cards_file="data/raw/cards.json", rng=None):
         self.cards_file = Path(cards_file)
+        self.random = rng if rng is not None else random.Random()
 
         # Original immutable-style card definitions loaded from JSON.
         self.card_definitions = []
@@ -87,13 +89,7 @@ class CardPool:
     # =========================================================
 
     def is_pool_card(self, card):
-        """
-        Check whether a card belongs in our shared pool.
-
-        Currently the pool contains:
-        - Normal Tavern minions
-        - Tavern spells
-        """
+        """Check whether a card belongs in the active Solos shared pool."""
 
         if not isinstance(card, dict):
             return False
@@ -121,10 +117,9 @@ class CardPool:
             if card.get("isReward", False):
                 return False
 
+            # Solos-only is valid for this simulator. Only Duos-only content is
+            # filtered out.
             if card.get("isDuosOnly", False):
-                return False
-
-            if card.get("isSolosOnly", False):
                 return False
 
             categories = card.get("categories", [])
@@ -157,9 +152,6 @@ class CardPool:
                 return False
 
             if card.get("isDuosOnly", False):
-                return False
-
-            if card.get("isSolosOnly", False):
                 return False
 
             if card.get("isQuest", False):
@@ -256,7 +248,7 @@ class CardPool:
         if not candidate_indices:
             return None
 
-        selected_index = random.choice(
+        selected_index = self.random.choice(
             candidate_indices
         )
 
