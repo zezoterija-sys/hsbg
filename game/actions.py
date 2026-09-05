@@ -48,8 +48,6 @@ class Action:
     def interaction_cost(self) -> int:
         """Artificial recruit-scheduler cost, not a Hearthstone resource."""
 
-        # Mandatory choice resolution is a continuation of the interaction that
-        # opened it. END_TURN only marks a seat finished.
         if self.action_type in (ActionType.END_TURN, ActionType.CHOOSE_OPTION):
             return 0
         return 1
@@ -139,23 +137,14 @@ class ActionSpace:
         if getattr(game_state, "phase", None) != "recruit":
             return
 
-        effects = getattr(
-            game_state,
-            "effects",
-            None,
-        )
+        effects = getattr(game_state, "effects", None)
 
-        # Mandatory choices must remain resolvable even after the scheduler
-        # budget reaches zero because they are continuations of paid actions.
+        # Mandatory choices remain resolvable after the scheduler budget reaches
+        # zero because they are continuations of interactions already paid for.
         if effects is not None:
-            pending = effects.get_pending_choice(
-                player.player_id
-            )
-
+            pending = effects.get_pending_choice(player.player_id)
             if pending is not None:
-                for option_idx in range(
-                    len(pending.options)
-                ):
+                for option_idx in range(len(pending.options)):
                     self.add_action(
                         Action(
                             ActionType.CHOOSE_OPTION,
@@ -166,6 +155,12 @@ class ActionSpace:
 
         scheduler = self._recruit_scheduler(game_state)
         if scheduler is not None and scheduler.has_player(player.player_id):
+            recruitment = getattr(game_state, "recruitment", None)
+            if recruitment is not None:
+                eligible = set(recruitment.eligible_player_ids())
+                if player.player_id not in eligible:
+                    return
+
             if scheduler.is_finished(player.player_id):
                 return
             interaction_budget = scheduler.remaining_budget(player.player_id)
@@ -234,8 +229,6 @@ class ActionSpace:
             if not isinstance(card, dict) or card.get("cardType") != "minion":
                 continue
 
-            # Normal play into an empty slot. Targeted Battlecries encode
-            # their effect target separately from the board destination.
             if effects is not None and effects.has_target_rule(card.get("id")):
                 context = TargetContext(
                     game=game_state,
@@ -265,8 +258,6 @@ class ActionSpace:
                         )
                     )
 
-            # Magnetic may be played directly onto an occupied Mech even when
-            # the board is full.
             if effects is not None and effects.is_magnetic(card):
                 for board_idx, target in enumerate(board):
                     if effects.can_magnetize(card, target):
