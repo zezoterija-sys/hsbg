@@ -137,23 +137,24 @@ passed("Real Bob -> ActionSpace -> Refresh -> Effects/Tavern/Pool path")
 
 
 # ---------------------------------------------------------------------------
-# 4. End every player's recruit turn through the real Action API.
-#    The eighth END_TURN should trigger:
-#        RECRUIT_END -> Bob.combat_phase() -> Combat.run_round()
-#        -> Bob.start_recruit_phase() -> round 2
+# 4. End every player's recruit turn through logical-time batches.
+#
+#    P0 already spent one interaction and therefore cannot act again until the
+#    other seven seats at logical time 0 have had their opportunity. This loop
+#    intentionally asks Recruitment which seats are eligible instead of
+#    imposing player-id order on the scheduler.
 # ---------------------------------------------------------------------------
-for player_id in range(8):
-    assert bob.phase == "recruit"
-    end_turn = get_action(bob, player_id, ActionType.END_TURN)
-    bob.execute_action(player_id, end_turn)
+while bob.phase == "recruit" and bob.round_number == 1:
+    eligible = bob.recruitment.eligible_player_ids()
+    assert eligible
 
-    # For the first seven players the current recruit phase must still exist.
-    if player_id < 7:
-        assert bob.phase == "recruit"
-        assert bob.round_number == 1
-        assert bob.get_player(player_id).waiting is True
+    submissions = [
+        (player_id, get_action(bob, player_id, ActionType.END_TURN))
+        for player_id in eligible
+    ]
+    bob.resolve_action_batch(submissions)
 
-passed("All eight END_TURN actions resolve through Recruitment")
+passed("All eight END_TURN actions resolve through logical-time scheduling")
 
 
 # ---------------------------------------------------------------------------
