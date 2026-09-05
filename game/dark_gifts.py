@@ -8,9 +8,10 @@ identity follows that minion through hand, board and combat.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 
+from .dark_gift_effects import attach_dark_gift
+from .events import GameEvent
 from .lobby import card_minion_types
 
 
@@ -29,6 +30,56 @@ DARK_DISCOVERY_TIERS = {
     8: (4, 5),
     9: (4, 5, 6),
     10: (5, 6),
+}
+
+# Final post-36.2.2 Gift offer windows. Several fields in the checked-in raw
+# hsbg.cards snapshot predate later Season 14 hotfixes, so live timing is
+# intentionally authoritative here rather than inferred from stale JSON tags.
+# None means open-ended on that side.
+DARK_GIFT_TURN_WINDOWS: dict[int, tuple[int | None, int | None]] = {
+    133310: (3, None),   # Sunken Persistence
+    132279: (3, None),   # Harpy's Talons
+    132443: (5, None),   # Jaws of Death
+    133421: (3, 3),      # Fortitude
+    133860: (3, 4),      # Affinity
+    133423: (3, 6),      # Sharpened Sword
+    133424: (3, 6),      # Toughened Shield
+    132733: (3, 5),      # Steady Growth
+    132448: (5, 8),      # Time Turning
+    133472: (4, None),   # Furtiveness
+    133474: (3, 5),      # Consanguinity
+    132734: (3, 5),      # Fresh Perspective
+    132445: (4, 7),      # Replication
+    133476: (4, 6),      # Battle Scars (early)
+    133478: (4, 6),      # Death's Embrace (early)
+    133480: (4, 6),      # Spell Siphon (early)
+    132441: (4, 8),      # Gilding
+    132485: (5, None),   # Double Vision
+    132442: (5, None),   # Toreth's Blessing
+    132790: (8, None),   # Amalgamation
+    133351: (5, 8),      # Demonology
+    133344: (5, 9),      # Polarization
+    132203: (5, 8),      # Mystic Essence
+    132732: (6, None),   # Tarecgosa's Blessing
+    133361: (7, 8),      # Dexterity (early)
+    132202: (6, 8),      # Incubation
+    132208: (6, None),   # Echoing Voice
+    132192: (6, 9),      # Offensive Sacrifice
+    132200: (6, 9),      # Defensive Sacrifice
+    133482: (7, None),   # Transcendence
+    132553: (7, 10),     # Battle Scars (late)
+    132554: (7, 10),     # Death's Embrace (late)
+    132555: (7, 10),     # Spell Siphon (late)
+    132207: (7, None),   # Admiration
+    133353: (9, None),   # Toxicity
+    132201: (7, 11),     # Charisma
+    132205: (7, 10),     # Resistance
+    133359: (7, 10),     # Hostility
+    133457: (9, 10),     # Dexterity (late)
+    132835: (9, 11),     # Golemancy
+    132276: (10, None),  # Persisting Horror
+    133363: (11, None),  # Titanic Strength
+    132833: (12, None),  # Invulnerability
 }
 
 # Explicit current hotfix exclusions/restrictions.
@@ -176,6 +227,7 @@ class DarkGiftSystem:
             )
             self.uses_by_player[player_id] = self.uses(player_id) + 1
             self.last_used_turn[player_id] = int(self.game.round_number)
+            self.game.effects.get_player_state(player_id)["dark_gift_uses"] = self.uses(player_id)
 
             choice = self.game.effects.start_choice(
                 player_id,
@@ -198,7 +250,10 @@ class DarkGiftSystem:
     def _has_possible_offer(self, player_id: int) -> bool:
         minions = self._eligible_physical_minions(player_id)
         gifts = self._eligible_gifts(player_id)
-        return bool(minions) and len({gift.get("name") for gift in gifts}) >= 3
+        return (
+            len(minions) >= DARK_GIFT_OPTIONS
+            and len({gift.get("name") for gift in gifts}) >= DARK_GIFT_OPTIONS
+        )
 
     def _eligible_physical_minions(self, player_id: int) -> list[dict]:
         turn = int(self.game.round_number)
@@ -250,8 +305,14 @@ class DarkGiftSystem:
             if card.get("pool") is not True:
                 continue
 
-            minimum = card.get("darkGiftMinTurn")
-            maximum = card.get("darkGiftMaxTurn")
+            card_id = card.get("id")
+            window = DARK_GIFT_TURN_WINDOWS.get(card_id)
+            if window is not None:
+                minimum, maximum = window
+            else:
+                minimum = card.get("darkGiftMinTurn")
+                maximum = card.get("darkGiftMaxTurn")
+
             if minimum is not None and turn < int(minimum):
                 continue
             if maximum is not None and turn > int(maximum):
@@ -480,7 +541,13 @@ class DarkGiftSystem:
         offers = list(metadata.get("reserved_offers", ()))
         selected = option.minion
 
-        self._attach_gift(selected, option.gift)
+        attach_dark_gift(
+            effects,
+            player_id,
+            selected,
+            option.gift,
+            acquired_turn=int(metadata.get("turn", self.game.round_number)),
+        )
         self._return_reserved_offers(offers, except_minion=selected)
 
         player = self.game.get_player(player_id)
@@ -493,20 +560,12 @@ class DarkGiftSystem:
 
         player.hand.append(selected)
         effects.events.emit(
-            effects.events and __import__("game.events", fromlist=["GameEvent"]).GameEvent.CARD_ADDED_TO_HAND,
+            GameEvent.CARD_ADDED_TO_HAND,
             player_id=player_id,
             card=selected,
             dark_gift=option.gift,
         )
         return selected
-
-    @staticmethod
-    def _attach_gift(minion: dict, gift: dict) -> None:
-        attached = deepcopy(gift)
-        attached["_dark_gift"] = True
-        minion.setdefault("_attachments", []).append(attached)
-        minion.setdefault("_dark_gift_ids", []).append(attached.get("id"))
-        minion.setdefault("_dark_gift_names", []).append(attached.get("name"))
 
     def _most_common_type(self, player_id: int) -> str | None:
         player = self.game.get_player(player_id)
