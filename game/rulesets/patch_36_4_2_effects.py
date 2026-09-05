@@ -9,7 +9,7 @@ specific deltas out of the generic effect engine and out of Bob.
 from __future__ import annotations
 
 from .patch_36_4_2 import CURRENT_RULESET
-from ..effects import EffectZone
+from ..effects import EffectZone, TriggerFamily
 from ..events import GameEvent
 from ..tier36_effects import (
     ASHEN_CORRUPTOR,
@@ -148,14 +148,11 @@ def _tasty_lobster(ctx):
             if card is not ctx.source and _is_type(ctx.system, card, "Beast")
         ]
         if beasts:
-            # The golden card doubles the ordinary numeric buff.
             attack = _amount(ctx, 2, 4)
             health = _amount(ctx, 1, 2)
             target = ctx.random_choice(beasts)
             ctx.buff(target, attack=attack, health=health)
 
-    # Existing engine semantics model "improve future Tasty Lobsters" as a
-    # playerbound stat improvement applied when later copies enter a zone.
     state = _state(ctx)
     state["tasty_lobster_future_attack"] = int(
         state.get("tasty_lobster_future_attack", 0) or 0
@@ -261,8 +258,6 @@ def _fire_forged_start(ctx):
     attack = _amount(ctx, 2, 4) + int(
         source.get("_fire_forged_attack", 0) or 0
     )
-    # 36.4.2 raised the starting Health component from +1 to +2. The existing
-    # permanent improvement step remains +1 Health per Tavern spell.
     health = _amount(ctx, 2, 4) + int(
         source.get("_fire_forged_health", 0) or 0
     )
@@ -361,7 +356,6 @@ def register_36_4_2_effect_overrides(effects) -> None:
     if CURRENT_RULESET.ruleset_id != "36.4.2-solos":
         return
 
-    # Tier 2 / lower content not present in the original Tier 3-6 registry.
     _remove_named(effects, SOUL_REWINDER, "Soul Rewinder")
     effects.register_effect(
         SOUL_REWINDER,
@@ -381,11 +375,7 @@ def register_36_4_2_effect_overrides(effects) -> None:
     )
 
     _remove_named(effects, TASTY_LOBSTER, "Tasty Lobster")
-    effects.register_deathrattle(
-        TASTY_LOBSTER,
-        _tasty_lobster,
-        name="Tasty Lobster",
-    )
+    effects.register_deathrattle(TASTY_LOBSTER, _tasty_lobster, name="Tasty Lobster")
 
     _remove_named(effects, PRIVATE_INVESTIGATOR, "Private Investigator")
     effects.register_activate(
@@ -469,11 +459,7 @@ def register_36_4_2_effect_overrides(effects) -> None:
     )
 
     _remove_named(effects, UTILITY_DRONE, "Utility Drone")
-    effects.register_end_of_turn(
-        UTILITY_DRONE,
-        _utility_drone,
-        name="Utility Drone",
-    )
+    effects.register_end_of_turn(UTILITY_DRONE, _utility_drone, name="Utility Drone")
 
     _remove_named(effects, SANGUINE_REFINER, "Sanguine Refiner")
     effects.register_rally(
@@ -528,6 +514,7 @@ def register_36_4_2_effect_overrides(effects) -> None:
         GameEvent.SPELL_CAST,
         _mighty_dragonbreath,
         zones=(EffectZone.EVENT_SOURCE,),
+        family=TriggerFamily.SPELL,
         name=f"Tier 3-6 spell {MIGHTY_DRAGONBREATH}",
     )
 
@@ -537,5 +524,6 @@ def register_36_4_2_effect_overrides(effects) -> None:
         GameEvent.SPELL_CAST,
         _natural_blessing,
         zones=(EffectZone.EVENT_SOURCE,),
+        family=TriggerFamily.SPELL,
         name=f"Tier 3-6 spell {NATURAL_BLESSING}",
     )
