@@ -11,8 +11,8 @@ random Tavern minion:
     -> real combat round
     -> automatic round 2 recruit initialization
 
-Run from the project root with:
-    python tests/test_bob_e2e_smoke.py
+Artificial recruit timing is asserted through RecruitScheduler rather than the
+deprecated Player.ap compatibility view.
 """
 
 import sys
@@ -51,7 +51,7 @@ def get_action(bob, player_id, action_type):
 # ---------------------------------------------------------------------------
 assert CARDS_FILE.exists(), f"Card database not found: {CARDS_FILE}"
 
-bob = Bob(cards_file=str(CARDS_FILE))
+bob = Bob(cards_file=str(CARDS_FILE), seed=12345)
 bob.initialize_game()
 
 assert bob.phase == "hero_selection"
@@ -63,7 +63,7 @@ assert sorted(bob.priority_order) == list(range(8))
 for player in bob.players:
     assert player.hero is None
     assert len(player.hero_choices) == 4
-    assert player.ap == 1
+    assert bob.scheduler.has_player(player.player_id) is False
 
 all_offers = [
     hero_id
@@ -97,9 +97,12 @@ for player in bob.players:
     assert player.eliminated is False
     assert player.waiting is False
     assert player.gold == 3
-    assert player.ap == 100
+    assert bob.scheduler.remaining_budget(player.player_id) == 100
+    assert bob.scheduler.logical_time(player.player_id) == 0
     assert player.tavern_tier == 1
     assert any(card is not None for card in player.tavern.slots)
+
+assert set(bob.recruitment.eligible_player_ids()) == set(range(8))
 
 passed("Hero selection flows automatically into round 1 recruitment")
 
@@ -113,16 +116,22 @@ p0 = bob.get_player(0)
 refresh_action = get_action(bob, 0, ActionType.REFRESH)
 
 gold_before = p0.gold
-ap_before = p0.ap
+budget_before = bob.scheduler.remaining_budget(0)
+logical_time_before = bob.scheduler.logical_time(0)
 
 bob.execute_action(0, refresh_action)
 
 assert bob.phase == "recruit"
 assert bob.round_number == 1
 assert p0.gold == gold_before - 1
-assert p0.ap == ap_before - 1
+assert bob.scheduler.remaining_budget(0) == budget_before - 1
+assert bob.scheduler.logical_time(0) == logical_time_before + 1
 assert p0.waiting is False
 assert any(card is not None for card in p0.tavern.slots)
+
+# P0 has advanced to logical time 1, so the still-unmoved seats at logical time
+# 0 are the next simultaneous decision batch.
+assert set(bob.recruitment.eligible_player_ids()) == set(range(1, 8))
 
 passed("Real Bob -> ActionSpace -> Refresh -> Effects/Tavern/Pool path")
 
@@ -173,7 +182,8 @@ for player in bob.players:
     assert player.eliminated is False
     assert player.waiting is False
     assert player.gold == 4
-    assert player.ap == 100
+    assert bob.scheduler.remaining_budget(player.player_id) == 100
+    assert bob.scheduler.logical_time(player.player_id) == 0
     assert any(card is not None for card in player.tavern.slots)
 
     legal_actions = bob.get_player_action_space(player.player_id)
@@ -183,7 +193,9 @@ for player in bob.players:
         for action in legal_actions
     )
 
-passed("Round 2 resources, Taverns, and action spaces initialize correctly")
+assert set(bob.recruitment.eligible_player_ids()) == set(range(8))
+
+passed("Round 2 resources, Taverns, scheduler, and action spaces initialize correctly")
 
 
 print()
