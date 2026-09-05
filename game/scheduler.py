@@ -42,10 +42,6 @@ class RecruitScheduler:
         self._states: dict[int, RecruitSeatState] = {}
         self._pending_choice_provider: Callable[[int], bool] | None = None
 
-    # ------------------------------------------------------------------
-    # Phase lifecycle
-    # ------------------------------------------------------------------
-
     def begin_phase(self, player_ids: Iterable[int]) -> None:
         """Create fresh scheduling state for every living recruit seat."""
 
@@ -83,10 +79,6 @@ class RecruitScheduler:
                 f"Player {player_id} has no active recruit scheduling state."
             ) from exc
 
-    # ------------------------------------------------------------------
-    # Compatibility/read access
-    # ------------------------------------------------------------------
-
     def remaining_budget(self, player_id: int) -> int:
         return self.state_for(player_id).remaining_budget
 
@@ -94,15 +86,20 @@ class RecruitScheduler:
         return self.state_for(player_id).logical_time
 
     def is_finished(self, player_id: int) -> bool:
+        """Effective finished state; mandatory continuations keep the seat active."""
+
+        state = self.state_for(player_id)
+        return state.finished and not self.has_pending_choice(player_id)
+
+    def is_budget_finished(self, player_id: int) -> bool:
+        """Raw scheduler finish flag, ignoring mandatory continuations."""
+
         return self.state_for(player_id).finished
 
     def is_waiting_compat(self, player_id: int) -> bool:
         """Old ``Player.waiting`` view without stranding mandatory choices."""
 
-        state = self.state_for(player_id)
-        if not state.finished:
-            return False
-        return not self.has_pending_choice(player_id)
+        return self.is_finished(player_id)
 
     def set_remaining_budget(self, player_id: int, amount: int) -> None:
         """Compatibility hook for old AP-oriented tests/tools."""
@@ -120,10 +117,6 @@ class RecruitScheduler:
             state.finished = False
             state.finish_reason = None
 
-    # ------------------------------------------------------------------
-    # Eligibility
-    # ------------------------------------------------------------------
-
     def eligible_player_ids(
         self,
         player_ids: Iterable[int] | None = None,
@@ -134,8 +127,7 @@ class RecruitScheduler:
 
         Pending mandatory choices take precedence because they are continuations
         of interactions that already resolved. Otherwise only unfinished seats
-        at the minimum logical time are eligible. This gives a clean notion of
-        simultaneous recruit actions without exposing scheduler state to agents.
+        at the minimum logical time are eligible.
         """
 
         allowed = (
@@ -189,10 +181,6 @@ class RecruitScheduler:
             return True
 
         return state.remaining_budget >= int(action.interaction_cost)
-
-    # ------------------------------------------------------------------
-    # State transitions
-    # ------------------------------------------------------------------
 
     def finish_player(self, player_id: int, reason: str = "end_turn") -> None:
         state = self.state_for(player_id)
@@ -257,10 +245,6 @@ class RecruitScheduler:
         if state.remaining_budget == 0:
             state.finished = True
             state.finish_reason = "budget_exhausted"
-
-    # ------------------------------------------------------------------
-    # Batch ordering / validation
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _priority_index(priority_order: Sequence[int]) -> dict[int, int]:
