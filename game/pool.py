@@ -8,7 +8,9 @@ selected versioned Battlegrounds ruleset before entering runtime state.
 Each available pool entry is an independent card copy.
 
 This simulator targets Battlegrounds Solos: Duos-only cards are excluded while
-Solos-only cards are explicitly allowed.
+Solos-only cards are explicitly allowed. Real games also provide the five
+active lobby minion types; isolated tests may omit them to inspect the complete
+card database without lobby filtering.
 """
 
 import json
@@ -16,19 +18,21 @@ import random
 from copy import deepcopy
 from pathlib import Path
 
+from .lobby import is_minion_available_for_lobby
 from .rulesets import CURRENT_RULESET
 
 
 class CardPool:
     """Shared pool of available minion and Tavern spell copies."""
 
+    # Current Solos physical-copy counts by Tavern Tier.
     MINION_COPY_COUNTS = {
-        1: 18,
-        2: 18,
-        3: 15,
-        4: 15,
-        5: 11,
-        6: 11,
+        1: 15,
+        2: 15,
+        3: 13,
+        4: 11,
+        5: 9,
+        6: 7,
     }
 
     TAVERN_SPELL_COPY_COUNTS = {
@@ -45,10 +49,16 @@ class CardPool:
         cards_file="data/raw/cards.json",
         rng=None,
         ruleset=CURRENT_RULESET,
+        active_minion_types=None,
     ):
         self.cards_file = Path(cards_file)
         self.random = rng if rng is not None else random.Random()
         self.ruleset = ruleset
+        self.active_minion_types = (
+            None
+            if active_minion_types is None
+            else tuple(sorted({str(value) for value in active_minion_types}))
+        )
 
         # Runtime card definitions are independent normalized copies. The raw
         # JSON is never modified in place.
@@ -107,8 +117,13 @@ class CardPool:
                 return False
             if "token" in categories:
                 return False
+            if card.get("tier") not in self.MINION_COPY_COUNTS:
+                return False
 
-            return card.get("tier") in self.MINION_COPY_COUNTS
+            return is_minion_available_for_lobby(
+                card,
+                self.active_minion_types,
+            )
 
         if card_type == "spell":
             if card.get("pool") is not True:
@@ -346,8 +361,14 @@ class CardPool:
         return len(self.available_cards)
 
     def __repr__(self):
+        lobby = (
+            "all-types"
+            if self.active_minion_types is None
+            else ",".join(self.active_minion_types)
+        )
         return (
             f"CardPool(available={len(self.available_cards)}, "
             f"definitions={len(self.card_definitions)}, "
-            f"ruleset={self.ruleset.ruleset_id})"
+            f"ruleset={self.ruleset.ruleset_id}, "
+            f"lobby={lobby})"
         )
