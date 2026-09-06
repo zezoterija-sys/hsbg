@@ -1,13 +1,17 @@
 """Current Battlegrounds content that exercises the economy primitives.
 
 This module is intentionally small and rules-focused. It upgrades the legacy
-Gold handlers to the post-24.2 economy semantics and implements current content
+Gold handlers to the current economy semantics and implements current content
 whose primary mechanic is Gold/max-Gold state.
 """
 
 from __future__ import annotations
 
-from .economy import install_economy_primitives
+from .economy import (
+    HASTY_EXCAVATION,
+    install_economy_primitives,
+    install_tavern_spell_purchase_guard,
+)
 from .effects import EffectZone, TriggerFamily
 from .events import GameEvent
 
@@ -29,6 +33,10 @@ def _remove_named(effects, card_id: int, *names: str) -> None:
 
 
 def _tavern_coin(ctx):
+    ctx.system.add_gold(ctx.source_player_id, 1)
+
+
+def _hasty_excavation(ctx):
     ctx.system.add_gold(ctx.source_player_id, 1)
 
 
@@ -83,6 +91,7 @@ def register_economy_effects(game) -> None:
 
     effects = game.effects
     install_economy_primitives(effects)
+    install_tavern_spell_purchase_guard(game)
 
     if getattr(effects, "_economy_content_registered", False):
         return
@@ -97,6 +106,15 @@ def register_economy_effects(game) -> None:
         zones=(EffectZone.EVENT_SOURCE,),
         family=TriggerFamily.SPELL,
         name="Tavern Coin",
+    )
+
+    effects.register_effect(
+        HASTY_EXCAVATION,
+        GameEvent.SPELL_CAST,
+        _hasty_excavation,
+        zones=(EffectZone.EVENT_SOURCE,),
+        family=TriggerFamily.SPELL,
+        name="Hasty Excavation",
     )
 
     effects.register_effect(
