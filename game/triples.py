@@ -7,6 +7,7 @@ from .events import GameEvent
 
 
 TRIPLE_REWARD = 59604  # TB_BaconShop_Triples_01, not the anomaly variants.
+ELEMENTAL_OF_SURPRISE = 101280  # BG26_175
 
 
 class TripleSystem:
@@ -32,6 +33,48 @@ class TripleSystem:
         for player_id in ids:
             self.resolve(player_id)
 
+    def _find_triple(self, cards):
+        """Return (copies, output_base_id) for the next legal triple.
+
+        Exact three-copy triples take precedence. Elemental of Surprise is the
+        one ordinary minion exception: it can stand in for copies of a single
+        Elemental identity. It does not allow three unrelated Elementals to
+        combine. When Surprise is used as the wildcard, the resulting golden
+        minion is the other Elemental rather than Surprise itself.
+        """
+        groups = defaultdict(list)
+        for card in cards:
+            groups[card["id"]].append(card)
+
+        for card_id, group in groups.items():
+            if len(group) >= 3:
+                return group[:3], card_id
+
+        surprises = groups.get(ELEMENTAL_OF_SURPRISE, [])
+        if not surprises:
+            return None, None
+
+        # One Surprise completes a natural pair of the same Elemental.
+        for card in cards:
+            card_id = card["id"]
+            if card_id == ELEMENTAL_OF_SURPRISE:
+                continue
+            group = groups.get(card_id, [])
+            if (len(group) >= 2
+                    and self.game.effects.is_minion_type(group[0], "Elemental")):
+                return [group[0], group[1], surprises[0]], card_id
+
+        # Two Surprises can complete one copy of any Elemental.
+        if len(surprises) >= 2:
+            for card in cards:
+                card_id = card["id"]
+                if card_id == ELEMENTAL_OF_SURPRISE:
+                    continue
+                if self.game.effects.is_minion_type(card, "Elemental"):
+                    return [card, surprises[0], surprises[1]], card_id
+
+        return None, None
+
     def resolve(self, player_id):
         """Combine eligible copies from hand and board, never from combat/shop."""
         if self.game.phase != "recruit" or player_id in self._resolving:
@@ -42,15 +85,16 @@ class TripleSystem:
         self._resolving.add(player_id)
         try:
             while True:
-                groups = defaultdict(list)
-                for card in list(player.board) + list(player.hand):
+                eligible = [
+                    card
+                    for card in list(player.board) + list(player.hand)
                     if (isinstance(card, dict) and card.get("cardType") == "minion"
-                            and not self.game.effects.is_golden(card)):
-                        groups[card["id"]].append(card)
-                copies = next((cards[:3] for cards in groups.values() if len(cards) >= 3), None)
+                        and not self.game.effects.is_golden(card))
+                ]
+                copies, output_base_id = self._find_triple(eligible)
                 if copies is None:
                     break
-                golden = self.combine(copies)
+                golden = self.combine(copies, output_base_id=output_base_id)
                 identities = {id(card) for card in copies}
                 player.hand[:] = [c for c in player.hand if id(c) not in identities]
                 player.board[:] = [None if id(c) in identities else c for c in player.board]
@@ -64,21 +108,30 @@ class TripleSystem:
         finally:
             self._resolving.remove(player_id)
 
-    def combine(self, copies):
+    def combine(self, copies, *, output_base_id=None):
         """Golden base + net enchantment deltas, floored separately per stat.
 
         Aura bonuses are excluded: the new hand card has no board aura. Keep
         attachment identities and temporary expiry metadata independently of
         the native golden effect so Magnetics are neither lost nor doubled.
+        For Elemental of Surprise triples each consumed card's enchantment
+        delta is measured against its own printed base before being added to the
+        chosen resulting Elemental's golden base.
         """
         effects = self.game.effects
-        base = effects._definition_by_id(copies[0]["id"])
+        if output_base_id is None:
+            output_base_id = copies[0]["id"]
+        base = effects._definition_by_id(output_base_id)
         golden = effects.create_card(base["id"], golden=True, generated=False)
         for stat in ("attack", "health"):
             normal = int(base.get(stat, 0) or 0)
             golden_base = int(base.get(stat + "Gold") if base.get(stat + "Gold") is not None else 2 * normal)
-            delta = sum(int(c.get(stat, normal) or 0) - normal
-                        - int(c.get("_aura_" + stat + "_bonus", 0) or 0) for c in copies)
+            delta = 0
+            for card in copies:
+                card_base = effects._definition_by_id(card["id"])
+                card_normal = int(card_base.get(stat, 0) or 0)
+                delta += (int(card.get(stat, card_normal) or 0) - card_normal
+                          - int(card.get("_aura_" + stat + "_bonus", 0) or 0))
             golden[stat] = golden_base + max(0, delta)
         golden["golden"] = True
         golden["_triple_component_ids"] = [c["id"] for c in copies]
