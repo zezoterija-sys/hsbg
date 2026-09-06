@@ -1,7 +1,7 @@
 """Focused pool-accounting and special-combination triple regressions."""
 
 from game.bob import Bob
-from game.triples import ELEMENTAL_OF_SURPRISE
+from game.triples import ELEMENTAL_OF_SURPRISE, TRIPLE_REWARD
 
 
 def initialized_game():
@@ -143,3 +143,15 @@ def test_one_surprise_does_not_merge_two_different_elementals():
 
     assert len(player.hand) == 3
     assert not any(card["isGolden"] for card in player.hand)
+
+
+def test_unrelated_golden_minion_does_not_grant_triple_reward_when_played():
+    game = initialized_game()
+    player = game.get_player(0)
+    card_id = player.tavern.slots[0]["id"]
+    golden = game.effects.create_card(card_id, golden=True)
+    player.hand = [golden]
+
+    game.play_minion(0, 0, 0)
+
+    assert not any(card.get("id") == TRIPLE_REWARD for card in player.hand)
