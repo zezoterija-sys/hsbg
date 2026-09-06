@@ -91,3 +91,33 @@ def test_hasty_health_payment_emits_damage_that_soul_rewinder_can_rewind():
     assert player.health == 10
     assert player.armor == 5
     assert player.board[0]["health"] == rewinder_health_before + 2
+
+
+def test_reconstructed_recruit_world_installs_economy_rules_from_action_generation():
+    """Search/template Bobs must not need Recruitment.start() for economy rules."""
+
+    game = Bob(cards_file=str(CARDS_FILE), seed=5511)
+    game.create_players()
+    game.phase = "recruit"
+    game.round_number = 5
+    game.priority_order = list(range(8))
+
+    player = game.get_player(0)
+    player.health = 6
+    player.armor = 4
+    player.gold = 0
+    player.set_ap(20)
+    player.tavern.spell = game.effects.create_card(HASTY_EXCAVATION, generated=False)
+
+    # No explicit register_economy_effects(game) call: ActionSpace is the first
+    # normal entry point in a reconstructed search world and must install the
+    # same idempotent economy rules used by the real Recruitment phase.
+    assert not callable(getattr(game.effects, "can_pay_tavern_spell", None))
+    assert _has_buy_spell_action(game) is True
+    assert callable(getattr(game.effects, "can_pay_tavern_spell", None))
+
+    game.buy_spell(0)
+    assert player.gold == 0
+    assert player.health == 3
+    assert player.armor == 4
+    assert player.hand[0]["id"] == HASTY_EXCAVATION
