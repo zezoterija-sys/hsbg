@@ -1,8 +1,9 @@
 """Hero Power lifecycle regression tests.
 
-These tests deliberately use a real hero definition but no hero-specific effect
-handler. They verify that printed data alone is not enough to expose a Hero
-Power action and that the generic lifecycle controller owns legality/use state.
+These tests deliberately use Captain Eudora because her current Hero Power is
+still intentionally unimplemented by the audited runtime registry. They verify
+that printed data alone is not enough to expose a Hero Power action and that the
+generic lifecycle controller owns legality/use state.
 """
 
 from pathlib import Path
@@ -14,8 +15,8 @@ from game.hero_powers import HeroPowerSystem
 
 
 CARDS_FILE = Path(__file__).resolve().parents[1] / "data" / "raw" / "cards.json"
-GEORGE_HERO_ID = 57929
-GEORGE_POWER_ID = 57562
+EUDORA_HERO_ID = 62242
+EUDORA_POWER_ID = 62250
 
 
 def _game(*, round_number=1, gold=10):
@@ -24,7 +25,7 @@ def _game(*, round_number=1, gold=10):
     game.phase = "recruit"
     game.round_number = round_number
     player = game.get_player(0)
-    player.set_hero(GEORGE_HERO_ID)
+    player.set_hero(EUDORA_HERO_ID)
     player.set_gold(gold)
     player.set_ap(20)
     return game, player, HeroPowerSystem.for_game(game)
@@ -50,19 +51,19 @@ def _hero_power_action(game, player_id=0):
 def test_printed_hero_power_without_runtime_rule_is_not_clickable():
     game, _, hero_powers = _game()
 
-    assert hero_powers.get_rule(GEORGE_POWER_ID) is None
+    assert hero_powers.get_rule(EUDORA_POWER_ID) is None
     assert hero_powers.can_use(0) is False
     assert _has_hero_power_action(game) is False
 
 
 def test_passive_and_automatic_rules_never_create_clickable_actions():
     passive_game, _, passive = _game()
-    passive.register_passive(GEORGE_POWER_ID)
+    passive.register_passive(EUDORA_POWER_ID)
     assert passive.can_use(0) is False
     assert _has_hero_power_action(passive_game) is False
 
     automatic_game, _, automatic = _game()
-    automatic.register_automatic(GEORGE_POWER_ID)
+    automatic.register_automatic(EUDORA_POWER_ID)
     assert automatic.can_use(0) is False
     assert _has_hero_power_action(automatic_game) is False
 
@@ -70,7 +71,7 @@ def test_passive_and_automatic_rules_never_create_clickable_actions():
 def test_active_rule_enforces_turn_and_tavern_tier_unlocks_before_action_generation():
     game, player, hero_powers = _game(round_number=2)
     hero_powers.register_active(
-        GEORGE_POWER_ID,
+        EUDORA_POWER_ID,
         unlock_turn=3,
         unlock_tavern_tier=4,
     )
@@ -88,7 +89,7 @@ def test_active_rule_enforces_turn_and_tavern_tier_unlocks_before_action_generat
 
 def test_emitted_use_is_recorded_and_default_once_per_turn_limit_blocks_second_use():
     game, player, hero_powers = _game(round_number=5)
-    hero_powers.register_active(GEORGE_POWER_ID)
+    hero_powers.register_active(EUDORA_POWER_ID)
 
     # ActionSpace legality is checked here, while the actual emitted-use state
     # is exercised directly through Bob.use_hero_power so this isolated unit
@@ -110,7 +111,7 @@ def test_emitted_use_is_recorded_and_default_once_per_turn_limit_blocks_second_u
 
 def test_once_per_game_rule_remains_exhausted_on_later_turns():
     game, _, hero_powers = _game(round_number=5)
-    hero_powers.register_active(GEORGE_POWER_ID, max_uses_per_game=1)
+    hero_powers.register_active(EUDORA_POWER_ID, max_uses_per_game=1)
 
     game.events.emit(GameEvent.HERO_POWER_USED, player_id=0)
     assert hero_powers.uses_this_game(0) == 1
@@ -122,7 +123,7 @@ def test_once_per_game_rule_remains_exhausted_on_later_turns():
 
 def test_extra_uses_extend_only_the_current_turn_limit():
     game, _, hero_powers = _game(round_number=5)
-    hero_powers.register_active(GEORGE_POWER_ID)
+    hero_powers.register_active(EUDORA_POWER_ID)
 
     game.events.emit(GameEvent.HERO_POWER_USED, player_id=0)
     assert hero_powers.can_use(0) is False
@@ -152,7 +153,7 @@ def test_delayed_effect_arm_is_explicit_and_consumed_once():
 
 def test_game_start_resets_runtime_uses_and_arms_but_preserves_rules():
     game, _, hero_powers = _game(round_number=5)
-    hero_powers.register_active(GEORGE_POWER_ID, max_uses_per_game=1)
+    hero_powers.register_active(EUDORA_POWER_ID, max_uses_per_game=1)
     game.events.emit(GameEvent.HERO_POWER_USED, player_id=0)
     hero_powers.arm(0, "test")
 
@@ -161,6 +162,6 @@ def test_game_start_resets_runtime_uses_and_arms_but_preserves_rules():
 
     game.events.emit(GameEvent.GAME_START, player_count=8)
 
-    assert hero_powers.get_rule(GEORGE_POWER_ID) is not None
+    assert hero_powers.get_rule(EUDORA_POWER_ID) is not None
     assert hero_powers.uses_this_game(0) == 0
     assert hero_powers.is_armed(0, "test") is False
