@@ -1,10 +1,10 @@
 """Hero Power lifecycle and legality for Battlegrounds.
 
-Hero definitions contain printed data (id, cost, text).  This module owns the
+Hero definitions contain printed data (id, cost, text). This module owns the
 runtime lifecycle that decides whether a Hero Power is an actual player action.
 
 A power is deliberately unavailable until its runtime implementation registers
-one :class:`HeroPowerRule`.  This prevents data-only/passive powers from being
+one :class:`HeroPowerRule`. This prevents data-only/passive powers from being
 silently exposed as clickable no-op actions.
 """
 
@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
+
+from .events import GameEvent
 
 
 class HeroPowerMode(str, Enum):
@@ -52,10 +54,12 @@ class HeroPowerRule:
 class HeroPowerSystem:
     """Runtime lifecycle controller for implemented Hero Powers.
 
-    Content handlers remain in the normal EffectSystem.  This object only owns
+    Content handlers remain in the normal EffectSystem. This object only owns
     legality/lifecycle state: active/passive mode, unlocks, use limits and
     delayed-effect arming.
     """
+
+    ATTRIBUTE_NAME = "hero_powers"
 
     def __init__(self, game):
         self.game = game
@@ -64,6 +68,42 @@ class HeroPowerSystem:
         self._uses_turn: dict[int, tuple[int, int]] = {}
         self._extra_uses_turn: dict[int, tuple[int, int]] = {}
         self._armed: dict[int, dict[str, Any]] = {}
+        self._event_registration_ids: list[int] = []
+        self._bind_events()
+
+    @classmethod
+    def for_game(cls, game):
+        """Return/create the one HeroPowerSystem attached to a game."""
+
+        current = getattr(game, cls.ATTRIBUTE_NAME, None)
+        if isinstance(current, cls):
+            return current
+        system = cls(game)
+        setattr(game, cls.ATTRIBUTE_NAME, system)
+        return system
+
+    def _bind_events(self):
+        events = getattr(self.game, "events", None)
+        if events is None or not hasattr(events, "register"):
+            return
+        self._event_registration_ids.append(
+            events.register(GameEvent.GAME_START, self._on_game_start, order=-9000)
+        )
+        self._event_registration_ids.append(
+            events.register(GameEvent.HERO_POWER_USED, self._on_hero_power_used, order=-9000)
+        )
+
+    def _on_game_start(self, event):
+        self.reset_runtime_state()
+
+    def _on_hero_power_used(self, event):
+        player_id = event.get("player_id")
+        if player_id is None:
+            return
+        rule = self.rule_for_player(player_id)
+        if rule is None or rule.mode is not HeroPowerMode.ACTIVE:
+            return
+        self.record_use(player_id)
 
     # -----------------------------------------------------------------
     # Registration
@@ -251,7 +291,7 @@ class HeroPowerSystem:
         return True
 
     def record_use(self, player_id):
-        """Commit one already-validated active Hero Power use."""
+        """Record one active Hero Power use emitted by the game."""
 
         player_id = int(player_id)
         round_number = self._round_number()
