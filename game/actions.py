@@ -141,6 +141,15 @@ class ActionSpace:
 
         effects = getattr(game_state, "effects", None)
 
+        # Normal Recruitment installs current economy content before TURN_START.
+        # MCTS/public-template Bobs can be reconstructed directly into recruit
+        # without calling Recruitment.start(), so make the same idempotent rules
+        # available before legal Tavern-spell purchases are generated there.
+        if effects is not None and callable(getattr(game_state, "buy_spell", None)):
+            from .economy_effects import register_economy_effects
+
+            register_economy_effects(game_state)
+
         # Mandatory choices remain resolvable after the scheduler budget reaches
         # zero because they are continuations of interactions already paid for.
         if effects is not None:
