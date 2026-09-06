@@ -9,6 +9,7 @@ Bob/Recruitment and the RecruitScheduler.
 from copy import deepcopy
 
 from .actions import ActionSpace
+from .economy import DEFAULT_MAX_GOLD, gain_gold, increase_max_gold
 from .tavern import Tavern
 from .heroes import HEROES
 
@@ -16,7 +17,10 @@ from .heroes import HEROES
 class Player:
     """Represents one player in the game."""
 
-    MAX_GOLD = 10
+    # Compatibility constant: this is the *default* start-of-turn maximum.
+    # Individual players own mutable ``max_gold`` because effects such as
+    # Strike Oil and Forest Lord Cenarius can permanently increase it.
+    MAX_GOLD = DEFAULT_MAX_GOLD
     MAX_BOARD_SIZE = 7
     MAX_HAND_SIZE = 10
 
@@ -28,6 +32,7 @@ class Player:
         # =====================================================
 
         self.gold = 0
+        self.max_gold = DEFAULT_MAX_GOLD
 
         # AP/waiting used to be stored as game resources on Player.  Keep
         # compatibility fallbacks for isolated tests/tools, but live recruit
@@ -156,25 +161,31 @@ class Player:
     # =========================================================
 
     def set_gold(self, amount):
-        """Set the player's gold."""
+        """Set normal turn-start Gold, bounded by this player's max Gold."""
 
         self.gold = min(
-            max(amount, 0),
-            self.MAX_GOLD,
+            max(int(amount), 0),
+            int(self.max_gold),
         )
 
     def add_gold(self, amount):
-        """Add gold, respecting the maximum gold cap."""
+        """Gain Gold immediately; shop-phase gains may exceed max Gold."""
 
         if amount < 0:
             raise ValueError(
                 "Cannot add negative gold."
             )
 
-        self.gold = min(
-            self.gold + amount,
-            self.MAX_GOLD,
-        )
+        return gain_gold(self, amount)
+
+    def increase_max_gold(self, amount=1):
+        """Permanently increase this player's start-of-turn maximum Gold."""
+
+        if amount < 0:
+            raise ValueError(
+                "Cannot decrease maximum gold through increase_max_gold."
+            )
+        return increase_max_gold(self, amount)
 
     def spend_gold(self, amount):
         """Spend gold."""
@@ -518,7 +529,7 @@ class Player:
             f"hero={hero_name}, "
             f"health={self.health}, "
             f"armor={self.armor}, "
-            f"gold={self.gold}, "
+            f"gold={self.gold}/{self.max_gold}, "
             f"interaction_budget={self.ap}, "
             f"logical_time={logical_time}, "
             f"tavern_tier={self.tavern_tier}, "
