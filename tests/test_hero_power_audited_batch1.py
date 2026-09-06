@@ -1,4 +1,4 @@
-"""Conformance tests for the first small audited Hero Power batch."""
+"""Conformance tests for the first audited Hero Power batches."""
 
 from pathlib import Path
 
@@ -12,9 +12,15 @@ from game.hero_power_effects import register_audited_hero_power_effects
 CARDS_FILE = Path(__file__).resolve().parents[1] / "data" / "raw" / "cards.json"
 
 GEORGE = 57929
+FLURGL = 60372
 NOZDORMU = 61489
+KAELTHAS = 61912
+DINOTAMER_BRANN = 60214
 OMU = 63604
 HOGGARR = 101130
+
+BRANN_BRONZEBEARD = 96786
+TAVERN_COIN = 104436
 
 
 def _game(hero_id, *, round_number=5, gold=10):
@@ -108,3 +114,66 @@ def test_hoggarr_is_passive_and_refunds_one_gold_only_after_buying_a_pirate():
 
     game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=pirate)
     assert player.gold == 5
+
+
+def test_flurgl_gets_one_random_lobby_murloc_after_every_five_sales():
+    game, player, hero_powers = _game(FLURGL)
+    game.active_minion_types = (
+        "Beast", "Dragon", "Mech", "Murloc", "Pirate"
+    )
+    assert hero_powers.can_use(0) is False
+
+    sold = {"id": -50, "cardType": "minion", "minionTypes": ["Beast"]}
+    for _ in range(4):
+        game.events.emit(GameEvent.CARD_SOLD, player_id=0, card=sold)
+    assert player.hand == []
+
+    game.events.emit(GameEvent.CARD_SOLD, player_id=0, card=sold)
+    assert len(player.hand) == 1
+    assert game.effects.is_minion_type(player.hand[0], "Murloc")
+
+    for _ in range(5):
+        game.events.emit(GameEvent.CARD_SOLD, player_id=0, card=sold)
+    assert len(player.hand) == 2
+    assert all(game.effects.is_minion_type(card, "Murloc") for card in player.hand)
+
+
+def test_kaelthas_gets_a_tavern_coin_after_each_three_minion_purchases():
+    game, player, hero_powers = _game(KAELTHAS)
+    assert hero_powers.can_use(0) is False
+
+    bought = {"id": -60, "cardType": "minion", "keywords": []}
+    for _ in range(2):
+        game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=bought)
+    assert not any(card.get("id") == TAVERN_COIN for card in player.hand)
+
+    game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=bought)
+    assert [card.get("id") for card in player.hand] == [TAVERN_COIN]
+
+    for _ in range(3):
+        game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=bought)
+    assert [card.get("id") for card in player.hand] == [TAVERN_COIN, TAVERN_COIN]
+
+
+def test_dinotamer_brann_rewards_after_four_battlecry_buys_only_once_per_game():
+    game, player, hero_powers = _game(DINOTAMER_BRANN)
+    assert hero_powers.can_use(0) is False
+
+    battlecry = {
+        "id": -70,
+        "cardType": "minion",
+        "keywords": ["Battlecry"],
+    }
+    plain = {"id": -71, "cardType": "minion", "keywords": []}
+
+    game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=plain)
+    for _ in range(3):
+        game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=battlecry)
+    assert not any(card.get("id") == BRANN_BRONZEBEARD for card in player.hand)
+
+    game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=battlecry)
+    assert [card.get("id") for card in player.hand].count(BRANN_BRONZEBEARD) == 1
+
+    for _ in range(8):
+        game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card=battlecry)
+    assert [card.get("id") for card in player.hand].count(BRANN_BRONZEBEARD) == 1
