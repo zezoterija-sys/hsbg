@@ -26,31 +26,42 @@ def elemental_ids(game, count=2):
     raise AssertionError("Test database does not contain enough Elementals.")
 
 
+def take_pool_copy(game, card_id):
+    index = next(
+        index
+        for index, card in enumerate(game.pool.available_cards)
+        if card.get("id") == card_id
+    )
+    return game.pool.available_cards.pop(index)
+
+
 def test_mixed_triple_sale_returns_only_physical_pool_components():
     game = initialized_game()
     player = game.get_player(0)
-    base = player.tavern.slots[0]
+    card_id = player.tavern.slots[0]["id"]
+    initial_pool_count = game.pool.available_count()
 
     player.hand = [
-        game.effects.create_card(base["id"], generated=False)
-        for _ in range(2)
+        take_pool_copy(game, card_id),
+        take_pool_copy(game, card_id),
     ]
+    assert game.pool.available_count() == initial_pool_count - 2
+
     game.effects.add_generated_to_hand(
         0,
-        game.effects.create_card(base["id"]),
+        game.effects.create_card(card_id),
     )
 
     assert len(player.hand) == 1
     golden = player.hand.pop()
     assert golden["isGolden"]
     assert len(golden["_triple_component_ids"]) == 3
-    assert golden["_pool_copies"] == [base["id"], base["id"]]
+    assert golden["_pool_copies"] == [card_id, card_id]
 
     player.board[0] = golden
-    before = game.pool.available_count()
     game.sell_minion(0, 0)
 
-    assert game.pool.available_count() == before + 2
+    assert game.pool.available_count() == initial_pool_count
 
 
 def test_fully_generated_triple_sale_returns_no_pool_copies():
