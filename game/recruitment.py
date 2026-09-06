@@ -33,11 +33,13 @@ class Recruitment:
             interaction_budget=self.RECRUIT_INTERACTION_BUDGET
         )
         self.scheduler.set_pending_choice_provider(
-            lambda player_id: (
-                self.bob.effects.get_pending_choice(player_id) is not None
-            )
+            self.has_pending_choice
         )
         self.bob.scheduler = self.scheduler
+
+    def has_pending_choice(self, player_id):
+        # Bound methods are rebound by deepcopy; closures retain the source Bob.
+        return self.bob.effects.get_pending_choice(player_id) is not None
 
     def start(self):
         """Start a new recruit phase."""
@@ -182,9 +184,8 @@ class Recruitment:
         if self.bob.phase != "recruit":
             return False
 
+        self.bob.combat.finalize_recruit_eliminations()
         alive_players = self.get_alive_players()
-        if not alive_players:
-            return False
 
         pending_choice_players = set(self.pending_choice_player_ids())
 
@@ -195,6 +196,9 @@ class Recruitment:
             ):
                 self._emit_turn_end_once(player)
 
+        # Turn-end effects can themselves open a mandatory Discover. Recheck
+        # after emitting them before transitioning into combat.
+        pending_choice_players = set(self.pending_choice_player_ids())
         if pending_choice_players:
             return False
 

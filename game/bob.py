@@ -49,7 +49,7 @@ class Bob:
         # state, not information that should be exposed to an AI observation.
         self.priority_order = []
 
-        self.hero_pool = list(HEROES.keys())
+        self.hero_pool = []
         self.game_over = False
         self.last_combat_result = None
 
@@ -67,6 +67,7 @@ class Bob:
             rng=self.random,
             active_minion_types=self.active_minion_types,
         )
+        self.hero_pool = self._solos_hero_ids()
 
         # Season 14 global Dark Discovery lifecycle. Individual Gift behavior
         # remains ordinary attachment-driven EffectSystem logic.
@@ -117,7 +118,7 @@ class Bob:
         )
 
         self.scheduler.clear()
-        self.hero_pool = list(HEROES.keys())
+        self.hero_pool = self._solos_hero_ids()
         self.create_players()
         self.generate_priority_order()
 
@@ -193,6 +194,14 @@ class Bob:
 
             for hero_id in choices:
                 available_heroes.remove(hero_id)
+
+    def _solos_hero_ids(self):
+        return [
+            hero_id for hero_id in HEROES
+            if (definition := self.pool.card_definitions_by_id.get(hero_id))
+            and definition.get("pool") is True
+            and not definition.get("isDuosOnly", False)
+        ]
 
     def choose_hero(self, player_id, hero_id):
         """Choose one offered hero. Hero selection is not recruit AP."""
@@ -496,15 +505,18 @@ class Bob:
         if len(player.hand) >= player.MAX_HAND_SIZE:
             raise ValueError("Hand is full.")
 
+        if player.gold < 3:
+            raise ValueError("Not enough Gold.")
+        # Reserve the purchased card's hand slot before Gold-spent effects can
+        # generate cards into that same slot (e.g. Sky Admiral Rogers).
+        player.hand.append(minion)
+        tavern.slots[tavern_slot] = None
         self.effects.spend_gold(
             player_id,
             3,
             reason="buy_minion",
             source=minion,
         )
-
-        player.hand.append(minion)
-        tavern.slots[tavern_slot] = None
 
         self.events.emit(
             GameEvent.CARD_BOUGHT,
@@ -530,15 +542,16 @@ class Bob:
             raise ValueError("Hand is full.")
 
         cost = int(spell.get("manaCost", 0) or 0)
+        if player.gold < cost:
+            raise ValueError("Not enough Gold.")
+        player.hand.append(spell)
+        tavern.spell = None
         self.effects.spend_gold(
             player_id,
             cost,
             reason="buy_spell",
             source=spell,
         )
-
-        player.hand.append(spell)
-        tavern.spell = None
 
         self.events.emit(
             GameEvent.SPELL_BOUGHT,
@@ -764,6 +777,18 @@ class Bob:
             player_id=player_id,
             spell=spell,
             card=spell,
+            target=(target_ref.card if target_ref is not None else None),
+            target_ref=target_ref,
+        )
+        # Casting a card from hand is also a card-play interaction. Generated
+        # casts elsewhere emit SPELL_CAST only and must not count as plays.
+        self.events.emit(
+            GameEvent.CARD_PLAYED,
+            source=self,
+            player=player,
+            player_id=player_id,
+            card=spell,
+            hand_index=hand_idx,
             target=(target_ref.card if target_ref is not None else None),
             target_ref=target_ref,
         )

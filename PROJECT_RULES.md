@@ -13,6 +13,18 @@ are deliberately changed.
   thinking budgets, or search trees.
 - There is no team reward or same-brain cooperation.
 
+## Work order
+
+- Complete and validate current Solos game rules and active mechanics first.
+- Maintain a basic AI interface/skeleton that can observe legal public/own
+  state and play the game correctly while that work proceeds.
+- Add focused regressions with game fixes, then run broad seeded full-game
+  validation before calling the simulator synchronized.
+- Defer teacher training, ML experiments, and deeper AI-method design until the
+  game is complete and the basic AI skeleton is working.
+- Keep work on `cleanup/current-architecture` / PR #1. Do not merge or modify
+  `main` without explicit user authorization.
+
 ## Fair comparison
 
 - Brain A and Brain B use the same hero-selection method in controlled A-vs-B

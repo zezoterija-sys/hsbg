@@ -177,6 +177,8 @@ class AgentObservation:
 
     recent_tavern_upgrades: tuple[TavernUpgradeMemory, ...]
     pending_choice: ChoiceView | None = None
+    # Public lobby rules; never inferred from hidden pool contents.
+    active_minion_types: tuple[str, ...] = ()
 
     def opponent(self, player_id: int) -> PublicOpponentView:
         for opponent in self.opponents:
@@ -413,6 +415,7 @@ class ObservationBuilder:
                 round_number
             ),
             pending_choice=self._build_pending_choice(game, player_id),
+            active_minion_types=tuple(sorted(getattr(game, "active_minion_types", ()))),
         )
 
     def _build_self_view(self, game: Any, player: Any) -> OwnPlayerView:
@@ -587,10 +590,10 @@ class ObservationBuilder:
         if pending is None:
             return None
 
-        options = tuple(
-            deepcopy(option)
-            for option in getattr(pending, "options", ())
-        )
+        # Preserve aliases between visible choice options and reservation
+        # metadata while detaching the entire graph from the real game.
+        pending = deepcopy(pending)
+        options = tuple(getattr(pending, "options", ()))
 
         source = _copy_card(
             getattr(pending, "source_card", None)
@@ -621,7 +624,7 @@ class ObservationBuilder:
                 if isinstance(source_card_id, int)
                 else None
             ),
-            metadata=deepcopy(
+            metadata=dict(
                 getattr(
                     pending,
                     "metadata",

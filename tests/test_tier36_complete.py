@@ -138,7 +138,7 @@ for definition in game.pool.card_definitions:
         continue
     if "tavern" not in (definition.get("categories") or []):
         continue
-    if definition.get("isDuosOnly", False) or definition.get("isSolosOnly", False):
+    if definition.get("isDuosOnly", False):
         continue
     actual[tier].add(definition["id"])
 

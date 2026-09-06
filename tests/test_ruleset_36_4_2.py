@@ -28,6 +28,8 @@ def test_card_hotfix_is_applied_without_mutating_raw_input():
     assert current["tier"] == 5
     assert current["attack"] == 7
     assert current["health"] == 7
+    assert current["attackGold"] == 14
+    assert current["healthGold"] == 14
     assert "+7/+7" in current["text"]
 
 
@@ -60,3 +62,20 @@ def test_missing_generated_hero_powers_are_repaired():
     assert "every 3 turns" in rakanishu["text"]
     assert tavish["name"] == "Lock and Load"
     assert "Remove a minion in the Tavern" in tavish["text"]
+
+
+def test_trinket_hotfixes_do_not_cross_lesser_greater_versions():
+    lesser = {"name": "Inductive Gyroblade", "cardType": "trinket",
+              "trinketTier": "lesser", "text": "Get a 4/4 Magnetic Satellite."}
+    greater = {**lesser, "trinketTier": "greater"}
+    assert CURRENT_RULESET.normalize_card(lesser) == lesser
+    assert "12/12" in CURRENT_RULESET.normalize_card(greater)["text"]
+    for tier in ("lesser", "greater"):
+        raw = {"name": "Jailer Sticker", "cardType": "trinket", "trinketTier": tier, "manaCost": 4}
+        assert CURRENT_RULESET.normalize_card(raw)["manaCost"] == 3
+
+
+def test_lesser_pool_removal_does_not_remove_greater_namesake():
+    base = {"name": "Blessing Portrait", "cardType": "trinket", "pool": True}
+    assert not CURRENT_RULESET.normalize_card({**base, "trinketTier": "lesser"})["pool"]
+    assert CURRENT_RULESET.normalize_card({**base, "trinketTier": "greater"})["pool"]

@@ -14,6 +14,7 @@ resolution bookkeeping.
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import partial
 
 from .effects import EffectZone, TriggerFamily
 from .events import GameEvent
@@ -177,6 +178,14 @@ def attach_dark_gift(
     _ensure_registered(effects)
     gift_id = int(gift["id"])
     attached = _attachment(gift, acquired_turn)
+
+    # The attached registry owns behavior, while the physical host must expose
+    # the gained trigger keyword to combat and keyword-dependent card effects.
+    families = {effect.family for effect in effects._effects.get(gift_id, ())}
+    for family, keyword in ((TriggerFamily.DEATHRATTLE, "Deathrattle"),
+                            (TriggerFamily.RALLY, "Rally")):
+        if family in families:
+            effects.grant_keyword(minion, keyword)
 
     if gift_id == HARPYS_TALONS:
         effects.grant_keyword(minion, "Divine Shield")
@@ -765,9 +774,9 @@ def _demonology_refresh_post(effects, event):
 
 
 def _register_global_dark_gift_hooks(effects) -> None:
-    effects.events.register(GameEvent.SPELL_CAST, lambda event: _sunken_spell_pre(effects, event), order=-1000)
-    effects.events.register(GameEvent.SPELL_CAST, lambda event: _sunken_spell_post(effects, event), order=1000)
-    effects.events.register(GameEvent.TAVERN_REFRESHED, lambda event: _demonology_refresh_post(effects, event), order=1000)
+    effects.events.register(GameEvent.SPELL_CAST, partial(_sunken_spell_pre, effects), order=-1000)
+    effects.events.register(GameEvent.SPELL_CAST, partial(_sunken_spell_post, effects), order=1000)
+    effects.events.register(GameEvent.TAVERN_REFRESHED, partial(_demonology_refresh_post, effects), order=1000)
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +790,7 @@ def register_dark_gift_effects(effects) -> None:
     board = (EffectZone.BOARD,)
     hand = (EffectZone.HAND,)
     board_hand = (EffectZone.BOARD, EffectZone.HAND)
-    board_combat = (EffectZone.BOARD, EffectZone.COMBAT)
+    board_combat = (EffectZone.BOARD, EffectZone.HAND, EffectZone.COMBAT)
     combat = (EffectZone.COMBAT,)
 
     effects.register_effect(SHARPENED_SWORD, GameEvent.CARD_PLAYED, _sharpened_sword, zones=board, name="Dark Gift: Sharpened Sword")
@@ -807,8 +816,8 @@ def register_dark_gift_effects(effects) -> None:
     effects.register_effect(BATTLE_SCARS_LATE, GameEvent.TRIGGER_RESOLVED, _battle_scars_late, zones=board_combat, name="Dark Gift: Battle Scars late")
     effects.register_effect(DEATHS_EMBRACE_EARLY, GameEvent.TRIGGER_RESOLVED, _deaths_embrace_early, zones=board_combat, name="Dark Gift: Death's Embrace early")
     effects.register_effect(DEATHS_EMBRACE_LATE, GameEvent.TRIGGER_RESOLVED, _deaths_embrace_late, zones=board_combat, name="Dark Gift: Death's Embrace late")
-    effects.register_effect(SPELL_SIPHON_EARLY, GameEvent.SPELL_CAST, _spell_siphon_early, zones=board, name="Dark Gift: Spell Siphon early")
-    effects.register_effect(SPELL_SIPHON_LATE, GameEvent.SPELL_CAST, _spell_siphon_late, zones=board, name="Dark Gift: Spell Siphon late")
+    effects.register_effect(SPELL_SIPHON_EARLY, GameEvent.SPELL_CAST, _spell_siphon_early, zones=board_hand, name="Dark Gift: Spell Siphon early")
+    effects.register_effect(SPELL_SIPHON_LATE, GameEvent.SPELL_CAST, _spell_siphon_late, zones=board_hand, name="Dark Gift: Spell Siphon late")
 
     effects.register_start_of_combat(TRANSCENDENCE, _transcendence, name="Dark Gift: Transcendence")
     effects.register_start_of_combat(RESISTANCE, _resistance, name="Dark Gift: Resistance")

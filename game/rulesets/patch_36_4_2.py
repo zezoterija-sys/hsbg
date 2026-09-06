@@ -116,7 +116,10 @@ CARD_OVERRIDES: dict[str, dict[str, Any]] = {
         "text": "Choose a minion. Give all minions that share a type with it +2/+1.",
     },
     "Sanctify": {"pool": False},
-    # Lesser Trinkets ---------------------------------------------------
+}
+
+
+LESSER_TRINKET_OVERRIDES: dict[str, dict[str, Any]] = {
     "Blessing Portrait": {"pool": False},
     "Copper Coil": {"pool": False},
     "Cowrie Necklace": {"pool": False},
@@ -133,6 +136,7 @@ CARD_OVERRIDES: dict[str, dict[str, Any]] = {
     "Chromatic Tear": {"manaCost": 3},
     "Bleeding Heart": {"manaCost": 2},
     "Kaleidoscope": {"manaCost": 0},
+    "Jailer Sticker": {"manaCost": 3},
     "Glowing Gauntlet": {"manaCost": 0},
     "Ophidian Staff": {"manaCost": 3},
     "Spell-powered Wrench": {"manaCost": 0},
@@ -169,7 +173,10 @@ CARD_OVERRIDES: dict[str, dict[str, Any]] = {
     "Nomi Sticker": {
         "text": "After you play an Elemental, give Elementals in the Tavern +3/+2 this game.",
     },
-    # Greater Trinkets --------------------------------------------------
+}
+
+
+GREATER_TRINKET_OVERRIDES: dict[str, dict[str, Any]] = {
     "Coral Spear": {"pool": False},
     "Dramaloc Sticker": {"manaCost": 6},
     "Myrmidon Sticker": {"manaCost": 3},
@@ -279,6 +286,8 @@ class BattlegroundsRuleset:
     card_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     hero_armor_overrides: Mapping[str, int] = field(default_factory=dict)
     hero_power_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    lesser_trinket_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    greater_trinket_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @property
     def ruleset_id(self) -> str:
@@ -288,9 +297,21 @@ class BattlegroundsRuleset:
         """Return an independent card definition normalized to this patch."""
 
         normalized = deepcopy(dict(card))
-        override = self.card_overrides.get(str(normalized.get("name", "")))
+        mapping = self.card_overrides
+        if normalized.get("cardType") == "trinket":
+            mapping = {
+                "lesser": self.lesser_trinket_overrides,
+                "greater": self.greater_trinket_overrides,
+            }.get(normalized.get("trinketTier"), {})
+        override = mapping.get(str(normalized.get("name", "")))
         if override:
             normalized.update(deepcopy(dict(override)))
+            if normalized.get("cardType") == "minion":
+                # These patch stat changes apply to the standard golden
+                # counterpart too. Never keep stale raw golden base stats.
+                for stat in ("attack", "health"):
+                    if stat in override and stat + "Gold" not in override:
+                        normalized[stat + "Gold"] = 2 * int(override[stat])
         return normalized
 
     def normalize_cards(self, cards) -> list[dict[str, Any]]:
@@ -319,4 +340,6 @@ CURRENT_RULESET = BattlegroundsRuleset(
     card_overrides=CARD_OVERRIDES,
     hero_armor_overrides=HERO_ARMOR_OVERRIDES,
     hero_power_overrides=HERO_POWER_OVERRIDES,
+    lesser_trinket_overrides=LESSER_TRINKET_OVERRIDES,
+    greater_trinket_overrides=GREATER_TRINKET_OVERRIDES,
 )

@@ -43,6 +43,8 @@ from agents.rollout_policy import (
 )
 from game.actions import Action, ActionType
 from game.bob import Bob
+from game.pool import CardPool
+from game.dark_gift_effects import _ensure_registered as ensure_dark_gift_effects
 from game.effects import PendingChoice
 
 
@@ -218,7 +220,7 @@ class DeterminizedBattlegroundsEnvironment:
 
         if (
             player.eliminated
-            or player.waiting
+            or (player.waiting and game.effects.get_pending_choice(root_player_id) is None)
             or game.phase != "recruit"
         ):
             return ()
@@ -538,10 +540,22 @@ class DeterminizedBattlegroundsEnvironment:
         game = Bob(
             cards_file=self.cards_file
         )
+        # The real lobby roll is public. Never replace it with a new random
+        # roll when constructing search worlds from the observation.
+        game.active_minion_types = tuple(observation.active_minion_types)
+        game.pool = CardPool(
+            cards_file=self.cards_file,
+            rng=game.random,
+            ruleset=game.pool.ruleset,
+            active_minion_types=game.active_minion_types,
+        )
 
         # Avoid initialize_game(): it would randomly deal heroes/Taverns that
         # are not part of this root observation.
         game.create_players()
+        game.scheduler.begin_phase(range(game.PLAYER_COUNT))
+        for player in game.players:
+            player.bind_recruit_scheduler(game.scheduler)
 
         game.round_number = int(
             observation.round_number
@@ -684,6 +698,14 @@ class DeterminizedBattlegroundsEnvironment:
                 dict(view.effect_state)
             )
         )
+        game.dark_gifts.uses_by_player[player.player_id] = int(effect_state.get("dark_gift_uses", 0))
+        if "dark_gift_last_used_turn" in effect_state:
+            game.dark_gifts.last_used_turn[player.player_id] = int(effect_state["dark_gift_last_used_turn"])
+        # Gift registrations are lazy in Bob. Restoring a gifted card must also
+        # restore the executable rules, not just its visible dictionary.
+        if any(isinstance(card, dict) and card.get("_dark_gift_ids")
+               for card in list(player.board) + list(player.hand)):
+            ensure_dark_gift_effects(game.effects)
 
     def _apply_opponent_public_state(
         self,
@@ -792,7 +814,7 @@ class DeterminizedBattlegroundsEnvironment:
         game: Bob,
         observation: AgentObservation,
     ) -> None:
-        choice = observation.pending_choice
+        choice = deepcopy(observation.pending_choice)
 
         if choice is None:
             return
@@ -808,15 +830,16 @@ class DeterminizedBattlegroundsEnvironment:
         ] = PendingChoice(
             player_id=observation.player_id,
             resolver_key=choice.resolver_key,
-            options=deepcopy(
-                list(choice.options)
-            ),
+            options=list(choice.options),
             kind=choice.kind,
             source_card_id=choice.source_card_id,
-            metadata=deepcopy(
-                dict(choice.metadata)
-            ),
+            metadata=dict(choice.metadata),
         )
+        if choice.resolver_key == game.dark_gifts.RESOLVER_KEY:
+            # These exact copies are publicly reserved by the root choice.
+            # They are not part of the root hand/shop counts removed above.
+            for offer in choice.options:
+                self.belief.consume_visible_card(game.pool, offer.minion)
 
     # ==================================================================
     # HIDDEN OPPONENT SAMPLING
@@ -924,113 +947,11 @@ class DeterminizedBattlegroundsEnvironment:
     # IMAGINARY OPPONENT POLICY
     # ==================================================================
 
-    def _run_one_opponent_cycle(
-        self,
-        state: DeterminizedGameState,
-        rng: random.Random,
-    ) -> None:
-        game = state.game
-        root_id = state.root_player_id
+    def _run_one_opponent_cycle(self, state, rng) -> None:
+        self._advance_until_root_decision(state, rng)
 
-        for player_id in self._opponent_order(
-            game,
-            root_id,
-        ):
-            if game.phase != "recruit":
-                return
-
-            player = game.get_player(
-                player_id
-            )
-
-            if (
-                player.eliminated
-                or player.waiting
-            ):
-                continue
-
-            self._take_one_opponent_action(
-                state,
-                player_id,
-                rng,
-            )
-
-    def _finish_current_recruit_phase(
-        self,
-        state: DeterminizedGameState,
-        rng: random.Random,
-    ) -> None:
-        game = state.game
-        root_id = state.root_player_id
-
-        safety = 0
-        max_safety = (
-            game.PLAYER_COUNT
-            * (
-                self.random_policy
-                .config
-                .force_end_after_actions
-                + 12
-            )
-        )
-
-        while (
-            game.phase == "recruit"
-            and not game.game_over
-            and safety < max_safety
-        ):
-            unfinished = [
-                player_id
-                for player_id in self._opponent_order(
-                    game,
-                    root_id,
-                )
-                if (
-                    not game.get_player(
-                        player_id
-                    ).eliminated
-                    and not game.get_player(
-                        player_id
-                    ).waiting
-                )
-            ]
-
-            if not unfinished:
-                game.recruitment.check_complete()
-                break
-
-            for player_id in unfinished:
-                if game.phase != "recruit":
-                    break
-
-                self._take_one_opponent_action(
-                    state,
-                    player_id,
-                    rng,
-                )
-                safety += 1
-
-                if safety >= max_safety:
-                    break
-
-        if (
-            game.phase == "recruit"
-            and not game.game_over
-        ):
-            # Final deterministic escape hatch: ask every remaining imaginary
-            # opponent to END_TURN whenever it is legal. Mandatory choice states
-            # are resolved first.
-            for player_id in self._opponent_order(
-                game,
-                root_id,
-            ):
-                self._force_opponent_to_end(
-                    state,
-                    player_id,
-                    rng,
-                )
-
-            game.recruitment.check_complete()
+    def _finish_current_recruit_phase(self, state, rng) -> None:
+        self._advance_until_root_decision(state, rng)
 
     def _take_one_opponent_action(
         self,
@@ -1154,44 +1075,42 @@ class DeterminizedBattlegroundsEnvironment:
                 )
             return
 
-    def _advance_until_root_decision(
-        self,
-        state: DeterminizedGameState,
-        rng: random.Random,
-    ) -> None:
-        """
-        Advance a waiting root through the rest of recruit/combat to its next
-        recruit decision, or stop if eliminated.
-        """
+    def _advance_until_root_decision(self, state, rng) -> None:
+        """Run scheduler-eligible opponent batches up to the next root decision."""
         game = state.game
         root_id = state.root_player_id
-
-        if self.is_terminal(
-            state,
-            root_id,
-        ):
-            return
-
-        if game.phase == "recruit":
-            root = game.get_player(
-                root_id
-            )
-
-            if root.waiting:
-                self._finish_current_recruit_phase(
-                    state,
-                    rng,
+        for _ in range(2000):
+            if self.is_terminal(state, root_id):
+                return
+            if game.phase != "recruit":
+                raise RuntimeError("Search expected synchronous recruit/combat transitions.")
+            eligible = game.recruitment.eligible_player_ids()
+            if root_id in eligible:
+                game.update_all_action_spaces()
+                return
+            if not eligible:
+                if game.recruitment.check_complete():
+                    continue
+                raise RuntimeError("Search recruit scheduler has no eligible seat.")
+            game.update_all_action_spaces()
+            submissions = []
+            for player_id in eligible:
+                legal = tuple(game.get_player_action_space(player_id))
+                if not legal:
+                    raise RuntimeError("Scheduler-eligible search opponent has no actions.")
+                count = state.opponent_actions_this_turn.get(player_id, 0)
+                action = self.random_policy.choose_action(
+                    legal, rng, actions_taken_this_turn=count,
                 )
-
-        # Bob resolves combat synchronously when recruitment completes, and
-        # automatically starts the next recruit if the game continues.
-        if (
-            not game.game_over
-            and game.phase == "recruit"
-        ):
-            game.update_action_space(
-                root_id
-            )
+                submissions.append((player_id, action))
+                state.opponent_actions_this_turn[player_id] = count + 1
+            previous_round = game.round_number
+            with self._engine_random_context(game, rng):
+                game.resolve_action_batch(submissions)
+            if game.round_number != previous_round:
+                state.root_actions_this_turn = 0
+                state.opponent_actions_this_turn.clear()
+        raise RuntimeError("Search opponent progression exceeded its safety limit.")
 
     # ==================================================================
     # ENGINE RNG / EXECUTION

@@ -828,34 +828,14 @@ class SelfPlayRunner:
             _TraceDraft
         ] = []
 
-        decision_order = [
-            player_id
-            for player_id in game.priority_order
-            if (
-                0 <= player_id
-                < self.PLAYER_COUNT
-            )
-        ]
-
-        # Defensive coverage if a future phase priority list omits a seat.
-        decision_order.extend(
-            player_id
-            for player_id in range(
-                self.PLAYER_COUNT
-            )
-            if player_id
-            not in decision_order
-        )
+        decision_order = list(game.recruitment.eligible_player_ids())
 
         for player_id in decision_order:
             player = game.get_player(
                 player_id
             )
 
-            if (
-                player.eliminated
-                or player.waiting
-            ):
+            if player.eliminated:
                 continue
 
             legal_actions = tuple(

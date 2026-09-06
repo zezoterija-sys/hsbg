@@ -133,6 +133,8 @@ class Player:
     def waiting(self):
         """Deprecated alias for scheduler finished state."""
 
+        if self.eliminated:
+            return True
         if self._has_scheduler_state():
             return self._recruit_scheduler.is_finished(self.player_id)
         return self._legacy_waiting
@@ -267,10 +269,8 @@ class Player:
             30,
         )
 
-        self.armor = hero_definition.get(
-            "armor",
-            0,
-        )
+        # The structured database represents no armor (e.g. Patchwerk) as null.
+        self.armor = int(hero_definition.get("armor") or 0)
 
     def get_hero_definition(self):
         """Return the player's complete hero definition."""

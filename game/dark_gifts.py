@@ -228,6 +228,7 @@ class DarkGiftSystem:
             self.uses_by_player[player_id] = self.uses(player_id) + 1
             self.last_used_turn[player_id] = int(self.game.round_number)
             self.game.effects.get_player_state(player_id)["dark_gift_uses"] = self.uses(player_id)
+            self.game.effects.get_player_state(player_id)["dark_gift_last_used_turn"] = int(self.game.round_number)
 
             choice = self.game.effects.start_choice(
                 player_id,

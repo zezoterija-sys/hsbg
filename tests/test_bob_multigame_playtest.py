@@ -226,64 +226,33 @@ def play_one_recruit_round(bob, rng, *, game_index: int, action_counter: Counter
         and bob.phase == "recruit"
         and bob.round_number == expected_round
     ):
-        made_progress = False
-
-        # Priority order is a convenient deterministic player traversal for one
-        # decision sweep; this is not using the collision resolver.
-        for player_id in list(bob.priority_order):
-            if (
-                bob.game_over
-                or bob.phase != "recruit"
-                or bob.round_number != expected_round
-            ):
-                break
-
-            player = bob.get_player(player_id)
-            if player.eliminated or player.waiting:
-                continue
-
+        submissions = []
+        # Gather all choices from one pre-action state. Mandatory continuations
+        # remain eligible after the seat's ordinary budget is exhausted.
+        for player_id in bob.recruitment.eligible_player_ids():
             legal_actions = bob.get_player_action_space(player_id)
             if not legal_actions:
-                fail(
-                    f"game={game_index} round={expected_round} player={player_id}: "
-                    "active player has no legal actions"
-                )
+                fail(f"game={game_index} round={expected_round} player={player_id}: "
+                     "scheduler-eligible player has no legal actions")
+            action = choose_action(rng, legal_actions, decisions[player_id])
+            submissions.append((player_id, action))
 
-            action = choose_action(
-                rng,
-                legal_actions,
-                decisions[player_id],
-            )
-
-            try:
-                bob.execute_action(player_id, action)
-            except Exception as exc:
-                legal_text = ", ".join(repr(item) for item in legal_actions)
-                raise RuntimeError(
-                    f"Engine failure during automated playtest: "
-                    f"game={game_index}, round={expected_round}, "
-                    f"player={player_id}, action={action!r}, "
-                    f"legal=[{legal_text}]"
-                ) from exc
-
+        if not submissions:
+            fail(f"game={game_index} round={expected_round}: no eligible batch")
+        try:
+            bob.resolve_action_batch(submissions)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Engine failure: game={game_index}, round={expected_round}, "
+                f"batch={submissions!r}"
+            ) from exc
+        for player_id, action in submissions:
             decisions[player_id] += 1
             action_counter[action.action_type.value] += 1
             actions_this_round += 1
-            made_progress = True
-
-            validate_game_state(bob, game_index=game_index)
-
-            if actions_this_round > MAX_ACTIONS_PER_RECRUIT_ROUND:
-                fail(
-                    f"game={game_index} round={expected_round}: exceeded "
-                    f"{MAX_ACTIONS_PER_RECRUIT_ROUND} actions without leaving recruit"
-                )
-
-        if not made_progress:
-            fail(
-                f"game={game_index} round={expected_round}: recruit phase is stuck; "
-                "no active player could make progress"
-            )
+        validate_game_state(bob, game_index=game_index)
+        if actions_this_round > MAX_ACTIONS_PER_RECRUIT_ROUND:
+            fail(f"game={game_index} round={expected_round}: action limit exceeded")
 
     # Bob resolves combat synchronously inside the final END_TURN and either
     # enters the next recruit phase or game_over before execute_action returns.
@@ -305,7 +274,7 @@ def play_one_recruit_round(bob, rng, *, game_index: int, action_counter: Counter
 def run_game(game_index: int, seed: int):
     rng = random.Random(seed)
 
-    bob = Bob(cards_file=str(CARDS_FILE))
+    bob = Bob(cards_file=str(CARDS_FILE), seed=seed)
     bob.initialize_game()
     validate_game_state(bob, game_index=game_index)
 
