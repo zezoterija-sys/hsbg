@@ -642,6 +642,11 @@ class DeterminizedBattlegroundsEnvironment:
         )
         player.placement = view.placement
 
+        # Restore the observed runtime identity before lifecycle state checks.
+        runtime_power = getattr(view, "hero_power", None)
+        if isinstance(runtime_power, dict):
+            player.set_hero_power(runtime_power)
+
         # set_hero normally establishes this. Preserve observation value if
         # available because hero/card effects may have modified it.
         player.hero_power_cost = int(

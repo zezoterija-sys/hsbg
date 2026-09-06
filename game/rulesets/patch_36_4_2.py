@@ -266,11 +266,13 @@ HERO_ARMOR_OVERRIDES: dict[str, int] = {
 HERO_POWER_OVERRIDES: dict[str, dict[str, Any]] = {
     # These two definitions were unresolved in the generated heroes.py file.
     "Rakanishu": {
+        "id": 122960,
         "name": "Tavern Lighting",
         "cost": 0,
         "text": "Your Tavern spells give an extra +1/+1. At the start of every 3 turns, improve this. (3 turns left!)",
     },
     "Tavish Stormpike": {
+        "id": 123150,
         "name": "Lock and Load",
         "cost": 0,
         "text": "Remove a minion in the Tavern. When you have space next combat, fire it at a random enemy minion.",

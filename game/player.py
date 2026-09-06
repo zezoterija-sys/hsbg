@@ -47,6 +47,13 @@ class Player:
 
         self.hero = None
         self.hero_choices = []
+        # ``hero_power`` is the player's current runtime power.  It starts as
+        # the printed power and may later be replaced by dynamic Hero Powers
+        # such as Master Nguyen, Sir Finley, or Genn.  Keep the immutable
+        # printed definition separately so replacement powers never need an
+        # ad-hoc hero-specific flag.
+        self.hero_power = None
+        self._base_hero_power = None
         self.hero_power_cost = 0
 
         # Combat durability.
@@ -271,9 +278,9 @@ class Player:
 
         self.hero = hero_id
 
-        self.hero_power_cost = (
-            hero_definition["power"]["cost"]
-        )
+        self._base_hero_power = deepcopy(hero_definition["power"])
+        self.hero_power = deepcopy(self._base_hero_power)
+        self.hero_power_cost = int(self.hero_power.get("cost", 0) or 0)
 
         self.health = hero_definition.get(
             "health",
@@ -302,14 +309,43 @@ class Player:
         return hero_definition["name"]
 
     def get_hero_power(self):
-        """Return the player's hero power definition."""
+        """Return the player's current runtime Hero Power definition."""
 
-        hero_definition = self.get_hero_definition()
-
-        if hero_definition is None:
+        if self.hero is None:
             return None
+        return self.hero_power
 
-        return hero_definition["power"]
+    def set_hero_power(self, power, *, cost=None):
+        """Replace the current runtime Hero Power.
+
+        Dynamic powers use this canonical path instead of changing the static
+        hero definition or attaching a hero-specific replacement flag.
+        """
+
+        if not isinstance(power, dict):
+            raise ValueError("Hero Power definition must be a dictionary.")
+        power_copy = deepcopy(power)
+        power_id = power_copy.get("id")
+        if isinstance(power_id, bool) or not isinstance(power_id, int):
+            raise ValueError("Runtime Hero Power must have an integer id.")
+        if not str(power_copy.get("name", "")).strip():
+            raise ValueError("Runtime Hero Power must have a name.")
+        if cost is None:
+            cost = power_copy.get("cost", 0)
+        cost = int(cost)
+        if cost < 0:
+            raise ValueError("Hero Power cost cannot be negative.")
+        power_copy["cost"] = cost
+        self.hero_power = power_copy
+        self.hero_power_cost = cost
+        return self.hero_power
+
+    def reset_hero_power(self):
+        """Restore the printed Hero Power and its printed cost."""
+
+        if self._base_hero_power is None:
+            raise ValueError("Player has no base Hero Power.")
+        return self.set_hero_power(self._base_hero_power)
 
     # =========================================================
     # HEALTH / ARMOR

@@ -8,7 +8,7 @@ unavailable as actions) until their lifecycle/effect has a conformance test.
 from __future__ import annotations
 
 from .economy import install_economy_primitives
-from .effects import EffectZone, TargetRef
+from .effects import EffectZone, TargetRef, TriggerFamily
 from .events import GameEvent
 from .hero_powers import HeroPowerSystem
 from .lobby import is_minion_available_for_lobby
@@ -27,11 +27,34 @@ CENARIUS_WISDOM_OF_ANCIENTS = 116921
 BLACKTHORN_BLOODBOUND = 71459
 LICH_KING_REBORN_RITES = 58040
 PATCHWERK_ALL_PATCHED_UP = 59399
+ALEXSTRASZA_QUEEN_OF_DRAGONS = 61517
+DOCTOR_HOLLIDAE_BLESSING_OF_THE_NINE_FROGS = 110472
+SKYCAPN_KRAGG_PIGGY_BANK = 62269
+CTHUN_SATURDAY_CTHUNS = 66246
+EDWIN_SHARPEN_BLADES = 57567
+SNAKE_EYES_LUCKY_ROLL = 105315
+RAGNAROS_BUY_INSECT = 64424
+RAGNAROS_SULFURAS = 64426
+KING_MUKLA_BANANARAMA = 59815
+MALYGOS_ARCANE_ALTERATION = 60378
+MILLIFICENT_TINKER = 57949
+PYRAMAD_BRICK_BY_BRICK = 59832
+LICH_BAZHIAL_GRAVEYARD_SHIFT = 60285
+XYRELLA_SEE_THE_LIGHT = 70957
+DEATHWING_ALL_WILL_BURN = 61406
+ALAKIR_SWATTING_INSECTS = 64402
+QUEEN_WAGTOGGLE_WAX_WARBAND = 59863
+LADY_VASHJ_RELICS_OF_THE_DEEP = 85126
+ROCK_MASTER_VOONE_UPBEAT_HARMONY = 99034
+SHUDDERWOCK_SNICKER_SNACK = 58028
+RAT_KING_A_TALE_OF_KINGS = 63127
+CAPTAIN_EUDORA_BURIED_TREASURE = 62250
 
 # Generated reward IDs.
 TAVERN_COIN = 104436
 BRANN_BRONZEBEARD = 96786
 BLOOD_GEM = 70136
+BANANA = 122906
 
 
 def _same_player(ctx):
@@ -67,6 +90,22 @@ def _generated_lobby_minions(system, *, minion_type=None):
         if not is_minion_available_for_lobby(card, game.active_minion_types):
             continue
         if minion_type is not None and not system.is_minion_type(card, minion_type):
+            continue
+        result.append(card)
+    return result
+
+
+def _generated_tavern_spells(system):
+    """Return current-patch Tavern spells eligible for generated rewards."""
+
+    result = []
+    for card in getattr(system.game.pool, "card_definitions", ()):
+        if not isinstance(card, dict) or card.get("cardType") != "spell":
+            continue
+        if card.get("pool") is not True or card.get("isDuosOnly", False):
+            continue
+        categories = {str(value).casefold() for value in (card.get("categories") or [])}
+        if "tavern" not in categories:
             continue
         result.append(card)
     return result
@@ -175,6 +214,422 @@ def _dinotamer_brann_battle_brand(ctx):
 
     state["hero_brann_battle_brand_rewarded"] = True
     ctx.system.add_generated_to_hand(ctx.source_player_id, BRANN_BRONZEBEARD)
+
+
+def _alexstrasza_queen_of_dragons(ctx):
+    if not _same_player(ctx):
+        return
+    candidates = _generated_lobby_minions(ctx.system, minion_type="Dragon")
+    ctx.system.discover_cards(
+        ctx.source_player_id,
+        candidates,
+        count=3,
+        resolver_key="add_card_to_hand",
+        metadata={"hero_power": ALEXSTRASZA_QUEEN_OF_DRAGONS},
+    )
+
+
+def _doctor_hollidae_blessing_of_the_nine_frogs(ctx):
+    if not _same_player(ctx):
+        return
+    candidates = _generated_tavern_spells(ctx.system)
+    chosen = ctx.random_choice(candidates)
+    if chosen is not None:
+        ctx.add_to_hand(chosen)
+
+
+def _skycapn_kragg_piggy_bank(ctx):
+    if not _same_player(ctx):
+        return
+    # The printed value is 2 Gold and improves by 1 each turn. Round 1 is
+    # therefore 2 Gold, round 2 is 3 Gold, and so on.
+    round_number = max(1, int(getattr(ctx.game, "round_number", 1) or 1))
+    ctx.system.add_gold(ctx.source_player_id, round_number + 1)
+
+
+def _cthun_saturday_cthuns(ctx):
+    if not _same_player(ctx):
+        return
+    if ctx.player_state().pop("hero_cthun_armed_round", None) != ctx.game.round_number:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    targets = [card for card in player.board if isinstance(card, dict)]
+    if not targets:
+        return
+    repetitions = max(1, int(getattr(ctx.game, "round_number", 1) or 1))
+    for _ in range(repetitions):
+        ctx.buff(ctx.random_choice(targets), attack=1, health=1)
+
+
+def _cthun_arm(ctx):
+    if _same_player(ctx):
+        ctx.player_state()["hero_cthun_armed_round"] = ctx.game.round_number
+
+
+def _edwin_sharpen_blades(ctx):
+    if not _same_player(ctx):
+        return
+    target = ctx.event.get("target")
+    if not isinstance(target, dict):
+        return
+    state = ctx.system.get_player_state(ctx.source_player_id)
+    purchases = int(state.get("hero_edwin_card_purchases", 0) or 0)
+    improvement = purchases // 4
+    ctx.buff(target, attack=2 + improvement, health=2 + improvement)
+
+
+def _edwin_purchase_counter(ctx):
+    if not _same_player(ctx):
+        return
+    state = ctx.player_state()
+    state["hero_edwin_card_purchases"] = int(
+        state.get("hero_edwin_card_purchases", 0) or 0
+    ) + 1
+
+
+def _snake_eyes_available(game, player):
+    state = game.effects.get_player_state(player.player_id)
+    cooldown_until = int(state.get("hero_snake_eyes_cooldown_until", 0) or 0)
+    return int(getattr(game, "round_number", 0) or 0) > cooldown_until
+
+
+def _snake_eyes_lucky_roll(ctx):
+    if not _same_player(ctx):
+        return
+    roll = ctx.rng.randint(1, 6)
+    ctx.system.add_gold(ctx.source_player_id, roll)
+    state = ctx.system.get_player_state(ctx.source_player_id)
+    state["hero_snake_eyes_last_roll"] = roll
+    state["hero_snake_eyes_cooldown_until"] = (
+        int(getattr(ctx.game, "round_number", 0) or 0) + roll
+    )
+
+
+def _ragnaros_buy_counter(ctx):
+    if not _same_player(ctx):
+        return
+    state = ctx.player_state()
+    count = int(state.get("hero_ragnaros_card_buys", 0) or 0) + 1
+    state["hero_ragnaros_card_buys"] = count
+    if count < 12:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    replacement = next(
+        (
+            card for card in getattr(ctx.game.pool, "card_definitions", ())
+            if isinstance(card, dict) and card.get("id") == RAGNAROS_SULFURAS
+        ),
+        {"id": RAGNAROS_SULFURAS, "name": "Sulfuras", "cost": 0,
+         "text": "At the end of your turn, give your left and right-most minions +8/+8."},
+    )
+    player.set_hero_power(replacement)
+
+
+def _ragnaros_sulfuras(ctx):
+    if not _same_player(ctx):
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    occupied = [card for card in player.board if isinstance(card, dict)]
+    if not occupied:
+        return
+    ctx.buff(occupied[0], attack=8, health=8)
+    ctx.buff(occupied[-1], attack=8, health=8)
+
+
+def _king_mukla_bananarama(ctx):
+    if not _same_player(ctx):
+        return
+    for _ in range(2):
+        ctx.system.add_generated_to_hand(ctx.source_player_id, BANANA)
+    for player in getattr(ctx.game, "players", ()):
+        if player.player_id == ctx.source_player_id or getattr(player, "eliminated", False):
+            continue
+        ctx.system.add_generated_to_hand(player.player_id, BANANA)
+
+
+def _tavern_targets(context):
+    player = context.game.get_player(context.player_id)
+    return [
+        TargetRef(
+            player_id=context.player_id,
+            zone=EffectZone.TAVERN,
+            index=index,
+            card=card,
+        )
+        for index, card in enumerate(player.tavern.slots)
+        if isinstance(card, dict)
+    ]
+
+
+def _malygos_arcane_alteration(ctx):
+    if not _same_player(ctx):
+        return
+    target_ref = ctx.event.get("target_ref")
+    if target_ref is None or target_ref.zone is not EffectZone.TAVERN:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    if target_ref.index < 0 or target_ref.index >= len(player.tavern.slots):
+        return
+    old_card = player.tavern.slots[target_ref.index]
+    if not isinstance(old_card, dict):
+        return
+    tier = old_card.get("tier")
+    ctx.game.pool.return_card(old_card)
+    replacement = ctx.game.pool.get_random_minion(tier=tier)
+    if replacement is None:
+        # Preserve the offering if the pool has no same-tier replacement.
+        replacement = old_card
+    player.tavern.slots[target_ref.index] = replacement
+
+
+def _millificent_tinker(ctx):
+    if not _same_player(ctx):
+        return
+    candidates = [
+        card for card in _generated_lobby_minions(ctx.system, minion_type="Mech")
+        if ctx.system.has_keyword(card, "Magnetic")
+    ]
+    ctx.system.discover_cards(
+        ctx.source_player_id,
+        candidates,
+        count=3,
+        resolver_key="add_card_to_hand",
+        metadata={"hero_power": MILLIFICENT_TINKER},
+    )
+
+
+def _can_take_tavern_minion(game, player):
+    return len(player.hand) < player.MAX_HAND_SIZE and any(
+        isinstance(card, dict) for card in player.tavern.slots
+    )
+
+
+def _take_tavern_minion(ctx, index):
+    player = ctx.get_player()
+    if len(player.hand) >= player.MAX_HAND_SIZE:
+        return None
+    card = player.tavern.slots[index]
+    if not isinstance(card, dict):
+        return None
+    player.tavern.slots[index] = None
+    player.hand.append(card)
+    return card
+
+
+def _pyramad_brick_by_brick(ctx):
+    if not _same_player(ctx):
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    choices = [card for card in player.tavern.slots if isinstance(card, dict)]
+    chosen = ctx.random_choice(choices)
+    if chosen is None:
+        return
+    slot = player.tavern.slots.index(chosen)
+    received = _take_tavern_minion(ctx, slot)
+    if received is None:
+        return
+    received["health"] = int(received.get("health", 0) or 0) * 2
+    player.tavern.slots[slot] = None
+
+
+def _lich_bazhial_graveyard_shift(ctx):
+    if not _same_player(ctx):
+        return
+    target_ref = ctx.event.get("target_ref")
+    if target_ref is None or target_ref.zone is not EffectZone.TAVERN:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    if target_ref.index < 0 or target_ref.index >= len(player.tavern.slots):
+        return
+    card = player.tavern.slots[target_ref.index]
+    if not isinstance(card, dict):
+        return
+    if _take_tavern_minion(ctx, target_ref.index) is None:
+        return
+    player.tavern.slots[target_ref.index] = None
+    armor_damage, health_damage = player.take_damage(2)
+    ctx.system.events.emit(
+        GameEvent.PLAYER_DAMAGED,
+        player_id=ctx.source_player_id,
+        amount=2,
+        armor_damage=armor_damage,
+        health_damage=health_damage,
+        source_card=ctx.source,
+    )
+
+
+def _xyrella_see_the_light(ctx):
+    if not _same_player(ctx):
+        return
+    target_ref = ctx.event.get("target_ref")
+    if target_ref is None or target_ref.zone is not EffectZone.TAVERN:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    if target_ref.index < 0 or target_ref.index >= len(player.tavern.slots):
+        return
+    card = player.tavern.slots[target_ref.index]
+    if not isinstance(card, dict):
+        return
+    received = _take_tavern_minion(ctx, target_ref.index)
+    if received is None:
+        return
+    received["attack"] = 2
+    received["health"] = 2
+    player.tavern.slots[target_ref.index] = None
+
+
+def _deathwing_all_will_burn(ctx):
+    if ctx.source_player_id is None or _source_combat_side(ctx) is None:
+        return
+    seen = set()
+    for side_key in ("side_a", "side_b"):
+        side = ctx.event.get(side_key)
+        if side is None or id(side) in seen:
+            continue
+        seen.add(id(side))
+        for minion in side.board:
+            if isinstance(minion, dict):
+                ctx.buff(minion, attack=2, health=0)
+
+
+def _source_combat_side(ctx):
+    if ctx.source_side is not None:
+        return ctx.source_side
+    for side_key in ("side_a", "side_b"):
+        side = ctx.event.get(side_key)
+        if side is not None and getattr(side, "player_id", None) == ctx.source_player_id:
+            return side
+    return None
+
+
+def _alakir_swatting_insects(ctx):
+    side = _source_combat_side(ctx)
+    if side is None or not side.board:
+        return
+    target = side.board[0]
+    if not isinstance(target, dict):
+        return
+    ctx.grant_keyword(target, "Windfury")
+    ctx.grant_keyword(target, "Divine Shield")
+    # Combat cards were prepared before COMBAT_START; a newly granted shield
+    # must update the combat engine's consumable shield state too.
+    target["_combat_divine_shield"] = True
+    ctx.grant_keyword(target, "Taunt")
+
+
+def _queen_wagtoggle_wax_warband(ctx):
+    side = _source_combat_side(ctx)
+    if side is None:
+        return
+    selected = set()
+    for minion in side.board:
+        if not isinstance(minion, dict):
+            continue
+        types = minion.get("minionTypes") or ([minion.get("minionType")] if minion.get("minionType") else [])
+        for minion_type in types:
+            if minion_type and minion_type not in selected:
+                ctx.buff(minion, attack=1, health=1)
+                selected.add(minion_type)
+
+
+def _generated_spellcraft_cards(system):
+    result = []
+    for card in getattr(system.game.pool, "card_definitions", ()):
+        if not isinstance(card, dict) or card.get("cardType") != "spell":
+            continue
+        if card.get("pool") is not True or card.get("isDuosOnly", False):
+            continue
+        categories = {str(value).casefold() for value in (card.get("categories") or [])}
+        if "spellcraft" in categories:
+            result.append(card)
+    return result
+
+
+def _lady_vashj_relics_of_the_deep(ctx):
+    if not _same_player(ctx):
+        return
+    chosen = ctx.random_choice(_generated_spellcraft_cards(ctx.system))
+    if chosen is not None:
+        ctx.system.add_generated_to_hand(ctx.source_player_id, chosen)
+
+
+def _rock_master_voone_upbeat_harmony(ctx):
+    if not _same_player(ctx):
+        return
+    state = ctx.player_state()
+    turns = int(state.get("hero_voone_turns", 0) or 0) + 1
+    state["hero_voone_turns"] = turns
+    if turns % 3 != 0:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    if player.hand:
+        original = player.hand[0]
+        ctx.system.add_generated_to_hand(
+            ctx.source_player_id, original["id"],
+            golden=ctx.system.is_golden(original),
+        )
+
+
+def _friendly_battlecry_targets(context):
+    player = context.game.get_player(context.player_id)
+    return [
+        TargetRef(
+            player_id=context.player_id,
+            zone=EffectZone.BOARD,
+            index=index,
+            card=card,
+        )
+        for index, card in enumerate(player.board)
+        if isinstance(card, dict) and context.game.effects.has_keyword(card, "Battlecry")
+    ]
+
+
+def _shudderwock_snicker_snack(ctx):
+    if not _same_player(ctx):
+        return
+    target_ref = ctx.event.get("target_ref")
+    if target_ref is None or target_ref.zone is not EffectZone.BOARD:
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    if target_ref.index < 0 or target_ref.index >= len(player.board):
+        return
+    target = player.board[target_ref.index]
+    if not isinstance(target, dict) or not ctx.system.has_keyword(target, "Battlecry"):
+        return
+    ctx.system.trigger_card_family(
+        target,
+        TriggerFamily.BATTLECRY,
+        player_id=ctx.source_player_id,
+        zone=EffectZone.BOARD,
+        position=target_ref.index,
+    )
+
+
+def _rat_king_a_tale_of_kings(ctx):
+    if not _same_player(ctx):
+        return
+    types = ("Beast", "Demon", "Mech", "Murloc", "Naga", "Pirate", "Quilboar", "Undead", "Dragon", "Elemental")
+    round_number = max(1, int(getattr(ctx.game, "round_number", 1) or 1))
+    minion_type = types[(round_number - 1) % len(types)]
+    candidates = _generated_lobby_minions(ctx.system, minion_type=minion_type)
+    ctx.system.discover_cards(
+        ctx.source_player_id,
+        candidates,
+        count=3,
+        resolver_key="add_card_to_hand",
+        metadata={"hero_power": RAT_KING_A_TALE_OF_KINGS, "minion_type": minion_type},
+    )
+
+
+def _captain_eudora_buried_treasure(ctx):
+    if not _same_player(ctx):
+        return
+    player = ctx.game.get_player(ctx.source_player_id)
+    dug = ctx.game.pool.get_random_minion(max_tier=max(1, int(player.tavern_tier)))
+    if dug is None:
+        return
+    golden = ctx.system.create_card(dug["id"], golden=True, generated=True)
+    ctx.system.add_generated_to_hand(ctx.source_player_id, golden)
 
 
 def register_audited_hero_power_effects(game) -> HeroPowerSystem:
@@ -303,6 +758,211 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     # Player.set_hero applies Patchwerk's 60 starting Health from the ruleset.
     # Register passive classification only: an extra grant would double-count.
     hero_powers.register_passive(PATCHWERK_ALL_PATCHED_UP)
+
+    hero_powers.register_active(ALEXSTRASZA_QUEEN_OF_DRAGONS, unlock_tavern_tier=4)
+    effects.register_effect(
+        ALEXSTRASZA_QUEEN_OF_DRAGONS,
+        GameEvent.HERO_POWER_USED,
+        _alexstrasza_queen_of_dragons,
+        zones=(EffectZone.HERO_POWER,),
+        name="Alexstrasza — Queen of Dragons",
+    )
+
+    hero_powers.register_active(DOCTOR_HOLLIDAE_BLESSING_OF_THE_NINE_FROGS)
+    effects.register_effect(
+        DOCTOR_HOLLIDAE_BLESSING_OF_THE_NINE_FROGS,
+        GameEvent.HERO_POWER_USED,
+        _doctor_hollidae_blessing_of_the_nine_frogs,
+        zones=(EffectZone.HERO_POWER,),
+        name="Doctor Holli'dae — Blessing of the Nine Frogs",
+    )
+
+    hero_powers.register_active(SKYCAPN_KRAGG_PIGGY_BANK, max_uses_per_game=1)
+    effects.register_effect(
+        SKYCAPN_KRAGG_PIGGY_BANK,
+        GameEvent.HERO_POWER_USED,
+        _skycapn_kragg_piggy_bank,
+        zones=(EffectZone.HERO_POWER,),
+        name="Skycap'n Kragg — Piggy Bank",
+    )
+
+    hero_powers.register_active(CTHUN_SATURDAY_CTHUNS)
+    effects.register_effect(CTHUN_SATURDAY_CTHUNS, GameEvent.HERO_POWER_USED,
+                            _cthun_arm, zones=(EffectZone.HERO_POWER,))
+    effects.register_effect(
+        CTHUN_SATURDAY_CTHUNS,
+        GameEvent.TURN_END,
+        _cthun_saturday_cthuns,
+        zones=(EffectZone.HERO_POWER,),
+        name="C'Thun — Saturday C'Thuns!",
+    )
+
+    hero_powers.register_active(EDWIN_SHARPEN_BLADES)
+    effects.register_target_rule(EDWIN_SHARPEN_BLADES, _friendly_board_targets)
+    effects.register_effect(
+        EDWIN_SHARPEN_BLADES, GameEvent.SPELL_BOUGHT,
+        _edwin_purchase_counter, zones=(EffectZone.HERO_POWER,),
+        name="Edwin VanCleef — spell purchase counter",
+    )
+    effects.register_effect(
+        EDWIN_SHARPEN_BLADES,
+        GameEvent.CARD_BOUGHT,
+        _edwin_purchase_counter,
+        zones=(EffectZone.HERO_POWER,),
+        name="Edwin VanCleef — purchase counter",
+    )
+    effects.register_effect(
+        EDWIN_SHARPEN_BLADES,
+        GameEvent.HERO_POWER_USED,
+        _edwin_sharpen_blades,
+        zones=(EffectZone.HERO_POWER,),
+        name="Edwin VanCleef — Sharpen Blades",
+    )
+
+    hero_powers.register_active(
+        SNAKE_EYES_LUCKY_ROLL,
+        condition=_snake_eyes_available,
+    )
+    effects.register_effect(
+        SNAKE_EYES_LUCKY_ROLL,
+        GameEvent.HERO_POWER_USED,
+        _snake_eyes_lucky_roll,
+        zones=(EffectZone.HERO_POWER,),
+        name="Snake Eyes — Lucky Roll",
+    )
+
+    hero_powers.register_passive(RAGNAROS_BUY_INSECT)
+    effects.register_effect(
+        RAGNAROS_BUY_INSECT, GameEvent.SPELL_BOUGHT,
+        _ragnaros_buy_counter, zones=(EffectZone.HERO_POWER,),
+        name="Ragnaros — spell purchase counter",
+    )
+    effects.register_effect(
+        RAGNAROS_BUY_INSECT,
+        GameEvent.CARD_BOUGHT,
+        _ragnaros_buy_counter,
+        zones=(EffectZone.HERO_POWER,),
+        name="Ragnaros — BUY, INSECT!",
+    )
+    hero_powers.register_passive(RAGNAROS_SULFURAS)
+    effects.register_effect(
+        RAGNAROS_SULFURAS,
+        GameEvent.TURN_END,
+        _ragnaros_sulfuras,
+        zones=(EffectZone.HERO_POWER,),
+        name="Ragnaros — Sulfuras",
+    )
+
+    hero_powers.register_automatic(KING_MUKLA_BANANARAMA)
+    effects.register_effect(
+        KING_MUKLA_BANANARAMA,
+        GameEvent.TURN_START,
+        _king_mukla_bananarama,
+        zones=(EffectZone.HERO_POWER,),
+        name="King Mukla — Bananarama",
+    )
+
+    hero_powers.register_active(MALYGOS_ARCANE_ALTERATION, max_uses_per_turn=2)
+    effects.register_target_rule(MALYGOS_ARCANE_ALTERATION, _tavern_targets)
+    effects.register_effect(
+        MALYGOS_ARCANE_ALTERATION,
+        GameEvent.HERO_POWER_USED,
+        _malygos_arcane_alteration,
+        zones=(EffectZone.HERO_POWER,),
+        name="Malygos — Arcane Alteration",
+    )
+
+    hero_powers.register_active(MILLIFICENT_TINKER, unlock_tavern_tier=4)
+    effects.register_effect(
+        MILLIFICENT_TINKER,
+        GameEvent.HERO_POWER_USED,
+        _millificent_tinker,
+        zones=(EffectZone.HERO_POWER,),
+        name="Millificent Manastorm — Tinker",
+    )
+
+    hero_powers.register_active(PYRAMAD_BRICK_BY_BRICK, condition=_can_take_tavern_minion)
+    effects.register_effect(
+        PYRAMAD_BRICK_BY_BRICK,
+        GameEvent.HERO_POWER_USED,
+        _pyramad_brick_by_brick,
+        zones=(EffectZone.HERO_POWER,),
+        name="Pyramad — Brick by Brick",
+    )
+
+    hero_powers.register_active(LICH_BAZHIAL_GRAVEYARD_SHIFT, condition=_can_take_tavern_minion)
+    effects.register_target_rule(LICH_BAZHIAL_GRAVEYARD_SHIFT, _tavern_targets)
+    effects.register_effect(
+        LICH_BAZHIAL_GRAVEYARD_SHIFT,
+        GameEvent.HERO_POWER_USED,
+        _lich_bazhial_graveyard_shift,
+        zones=(EffectZone.HERO_POWER,),
+        name="Lich Baz'hial — Graveyard Shift",
+    )
+
+    hero_powers.register_active(XYRELLA_SEE_THE_LIGHT, condition=_can_take_tavern_minion)
+    effects.register_target_rule(XYRELLA_SEE_THE_LIGHT, _tavern_targets)
+    effects.register_effect(
+        XYRELLA_SEE_THE_LIGHT,
+        GameEvent.HERO_POWER_USED,
+        _xyrella_see_the_light,
+        zones=(EffectZone.HERO_POWER,),
+        name="Xyrella — See the Light",
+    )
+
+    # Deathwing's draft does not persist combat Attack to recruitment cards.
+    # Do not install either its rule or its event handler until that is fixed.
+
+    hero_powers.register_passive(ALAKIR_SWATTING_INSECTS)
+    effects.register_effect(
+        ALAKIR_SWATTING_INSECTS,
+        GameEvent.COMBAT_START,
+        _alakir_swatting_insects,
+        zones=(EffectZone.HERO_POWER,),
+        name="Al'Akir — Swatting Insects",
+    )
+
+    # Wagtoggle's draft lacks spending progression and complete type selection.
+
+    hero_powers.register_automatic(LADY_VASHJ_RELICS_OF_THE_DEEP)
+    effects.register_effect(
+        LADY_VASHJ_RELICS_OF_THE_DEEP,
+        GameEvent.TURN_START,
+        _lady_vashj_relics_of_the_deep,
+        zones=(EffectZone.HERO_POWER,),
+        name="Lady Vashj — Relics of the Deep",
+    )
+
+    hero_powers.register_passive(ROCK_MASTER_VOONE_UPBEAT_HARMONY)
+    effects.register_effect(
+        ROCK_MASTER_VOONE_UPBEAT_HARMONY,
+        GameEvent.TURN_END,
+        _rock_master_voone_upbeat_harmony,
+        zones=(EffectZone.HERO_POWER,),
+        name="Rock Master Voone — Upbeat Harmony",
+    )
+
+    hero_powers.register_active(SHUDDERWOCK_SNICKER_SNACK, unlock_turn=3)
+    effects.register_target_rule(SHUDDERWOCK_SNICKER_SNACK, _friendly_battlecry_targets)
+    effects.register_effect(
+        SHUDDERWOCK_SNICKER_SNACK,
+        GameEvent.HERO_POWER_USED,
+        _shudderwock_snicker_snack,
+        zones=(EffectZone.HERO_POWER,),
+        name="Shudderwock — Snicker-snack",
+    )
+
+    hero_powers.register_active(RAT_KING_A_TALE_OF_KINGS)
+    effects.register_effect(
+        RAT_KING_A_TALE_OF_KINGS,
+        GameEvent.HERO_POWER_USED,
+        _rat_king_a_tale_of_kings,
+        zones=(EffectZone.HERO_POWER,),
+        name="The Rat King — A Tale of Kings",
+    )
+
+    # Not enabled: the draft below incorrectly rewards every dig. Restore
+    # registration only with a verified multi-dig cycle and pool provenance.
 
     hero_powers._audited_content_registered = True
     return hero_powers

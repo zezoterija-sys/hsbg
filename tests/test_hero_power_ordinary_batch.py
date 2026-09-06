@@ -6,13 +6,35 @@ import random
 import pytest
 
 from agents.observation import AgentMemory, ObservationBuilder
-from agents.observation_encoder import CardVocabulary, ObservationEncoder
 from agents.simulation_environment import DeterminizedBattlegroundsEnvironment
 from game.actions import ActionType
 from game.bob import Bob
 from game.effects import EffectZone
 from game.events import GameEvent
-from game.hero_power_effects import register_audited_hero_power_effects
+from game.hero_power_effects import (
+    ALEXSTRASZA_QUEEN_OF_DRAGONS,
+    CTHUN_SATURDAY_CTHUNS,
+    DEATHWING_ALL_WILL_BURN,
+    DOCTOR_HOLLIDAE_BLESSING_OF_THE_NINE_FROGS,
+    EDWIN_SHARPEN_BLADES,
+    KING_MUKLA_BANANARAMA,
+    LADY_VASHJ_RELICS_OF_THE_DEEP,
+    CAPTAIN_EUDORA_BURIED_TREASURE,
+    LICH_BAZHIAL_GRAVEYARD_SHIFT,
+    MALYGOS_ARCANE_ALTERATION,
+    MILLIFICENT_TINKER,
+    PYRAMAD_BRICK_BY_BRICK,
+    ALAKIR_SWATTING_INSECTS,
+    QUEEN_WAGTOGGLE_WAX_WARBAND,
+    ROCK_MASTER_VOONE_UPBEAT_HARMONY,
+    RAT_KING_A_TALE_OF_KINGS,
+    SHUDDERWOCK_SNICKER_SNACK,
+    XYRELLA_SEE_THE_LIGHT,
+    RAGNAROS_SULFURAS,
+    SKYCAPN_KRAGG_PIGGY_BANK,
+    SNAKE_EYES_LUCKY_ROLL,
+    register_audited_hero_power_effects,
+)
 from game.hero_powers import HeroPowerMode
 from game.heroes import HEROES
 
@@ -101,6 +123,8 @@ def test_blackthorn_cannot_pay_and_generated_gem_is_castable():
 
 
 def test_blackthorn_partial_uses_survive_search_and_encode_for_neural_ai():
+    from agents.observation_encoder import CardVocabulary, ObservationEncoder
+
     game, player = setup_game(BLACKTHORN)
     game.use_hero_power(0)
     game.update_all_action_spaces()
@@ -191,3 +215,294 @@ def test_ordinary_registration_does_not_duplicate_rewards():
     game.use_hero_power(0)
     assert len(player.hand) == 2
     assert game.hero_powers.uses_this_turn(0) == 1
+
+
+def test_runtime_hero_power_identity_can_be_replaced_and_reset():
+    game, player = setup_game(PATCHWERK)
+    original = deepcopy(player.get_hero_power())
+    replacement = {
+        "id": 999001,
+        "name": "Temporary Test Power",
+        "cost": 2,
+        "text": "A temporary test power.",
+    }
+    player.set_hero_power(replacement)
+    assert player.get_hero_power()["id"] == 999001
+    assert player.hero_power_cost == 2
+    player.reset_hero_power()
+    assert player.get_hero_power() == original
+    assert player.hero_power_cost == original["cost"]
+
+
+def test_alexstrasza_unlocks_at_tier_four_and_starts_discover():
+    game, player = setup_game(61488)
+    player.tavern_tier = 3
+    assert not power_actions(game)
+    player.tavern_tier = 4
+    assert game.hero_powers.get_rule(ALEXSTRASZA_QUEEN_OF_DRAGONS) is not None
+    assert len(power_actions(game)) == 1
+    game.use_hero_power(0)
+    choice = game.effects.get_pending_choice(0)
+    assert choice is not None
+    assert choice.kind == "discover"
+    assert len(choice.options) == 3
+    assert all(game.effects.is_minion_type(card, "Dragon") for card in choice.options)
+
+
+def test_doctor_hollidae_gets_a_tavern_spell():
+    game, player = setup_game(105434)
+    game.use_hero_power(0)
+    assert len(player.hand) == 1
+    assert player.hand[0]["cardType"] == "spell"
+    assert "tavern" in {str(x).casefold() for x in player.hand[0].get("categories", [])}
+
+
+def test_skycapn_kragg_is_once_per_game_and_scales_by_round():
+    game, player = setup_game(62268)
+    game.round_number = 1
+    game.use_hero_power(0)
+    assert player.gold == 12
+    assert not power_actions(game)
+    with pytest.raises(ValueError):
+        game.use_hero_power(0)
+
+
+def test_cthun_scales_end_of_turn_buffs():
+    game, player = setup_game(58535)
+    game.round_number = 2
+    minion = game.effects.create_card(120031)
+    player.board[0] = minion
+    register_audited_hero_power_effects(game)
+    game.use_hero_power(0)
+    game.events.emit(GameEvent.TURN_END, player_id=0, round_number=2)
+    assert (minion["attack"], minion["health"]) == (4, 4)
+    assert game.hero_powers.get_rule(CTHUN_SATURDAY_CTHUNS) is not None
+
+
+def test_edwin_improves_after_every_four_card_purchases():
+    game, player = setup_game(57633)
+    minion = game.effects.create_card(120031)
+    player.board[0] = minion
+    target = game.effects.resolve_target_ref(0, EffectZone.BOARD, 0)
+    for _ in range(4):
+        game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card={"cardType": "minion"})
+    game.use_hero_power(0, target_ref=target)
+    assert (minion["attack"], minion["health"]) == (5, 5)
+    assert game.hero_powers.get_rule(EDWIN_SHARPEN_BLADES) is not None
+
+
+def test_snake_eyes_rolls_gold_and_enforces_cooldown():
+    game, player = setup_game(105314)
+    game.round_number = 1
+    game.use_hero_power(0)
+    roll = game.effects.get_player_state(0)["hero_snake_eyes_last_roll"]
+    assert 1 <= roll <= 6
+    assert player.gold == 10 - 1 + roll
+    assert not power_actions(game)
+    game.round_number += roll
+    assert not power_actions(game)
+    game.round_number += 1
+    assert len(power_actions(game)) == 1
+    assert game.hero_powers.get_rule(SNAKE_EYES_LUCKY_ROLL) is not None
+
+
+def test_ragnaros_replaces_buy_insect_with_sulfuras():
+    game, player = setup_game(57892)
+    assert player.get_hero_power()["id"] == 64424
+    for _ in range(11):
+        game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card={"cardType": "minion"})
+    assert player.get_hero_power()["id"] == 64424
+    game.events.emit(GameEvent.CARD_BOUGHT, player_id=0, card={"cardType": "minion"})
+    assert player.get_hero_power()["id"] == RAGNAROS_SULFURAS
+    assert game.hero_powers.rule_for_player(0).power_id == RAGNAROS_SULFURAS
+    minion = game.effects.create_card(120031)
+    player.board[0] = minion
+    game.events.emit(GameEvent.TURN_END, player_id=0)
+    # A single minion occupies both ends and receives both +8/+8 buffs.
+    assert (minion["attack"], minion["health"]) == (18, 18)
+
+
+def test_king_mukla_distributes_bananas_at_turn_start():
+    game, player = setup_game(59814)
+    opponent = game.get_player(1)
+    game.events.emit(GameEvent.TURN_START, player_id=0)
+    assert [card["id"] for card in player.hand] == [122906, 122906]
+    assert [card["id"] for card in opponent.hand] == [122906]
+    assert game.hero_powers.get_rule(0) is None
+    assert game.hero_powers.get_rule(KING_MUKLA_BANANARAMA) is not None
+
+
+def test_malygos_replaces_a_tavern_minion_with_same_tier():
+    game, player = setup_game(61490)
+    player.tavern.slots[0] = game.pool.get_random_minion(tier=1)
+    original = next(card for card in player.tavern.slots if isinstance(card, dict))
+    slot = player.tavern.slots.index(original)
+    player.gold = 10
+    target = game.effects.resolve_target_ref(0, EffectZone.TAVERN, slot)
+    pool_before = len(game.pool.available_cards)
+    game.use_hero_power(0, target_ref=target)
+    replacement = player.tavern.slots[slot]
+    assert replacement is not None
+    assert replacement["tier"] == original["tier"]
+    assert replacement is not original
+    assert len(game.pool.available_cards) == pool_before
+    assert game.hero_powers.uses_this_turn(0) == 1
+
+
+def test_millificent_unlocks_at_tier_four_and_discovers_magnetic_mechs():
+    game, player = setup_game(57946)
+    game.active_minion_types = ("Beast", "Demon", "Dragon", "Elemental", "Mech")
+    game.pool.active_minion_types = game.active_minion_types
+    player.tavern_tier = 3
+    assert not power_actions(game)
+    player.tavern_tier = 4
+    assert game.hero_powers.get_rule(MILLIFICENT_TINKER) is not None
+    game.use_hero_power(0)
+    choice = game.effects.get_pending_choice(0)
+    assert choice is not None
+    assert len(choice.options) == 3
+    assert all(
+        game.effects.is_minion_type(card, "Mech")
+        and game.effects.has_keyword(card, "Magnetic")
+        for card in choice.options
+    )
+
+
+def test_pyramad_steals_a_tavern_minion_and_doubles_health():
+    game, player = setup_game(59831)
+    player.tavern.slots[0] = game.pool.get_random_minion(tier=1)
+    original = player.tavern.slots[0]
+    health_before = original["health"]
+    game.use_hero_power(0)
+    assert player.tavern.slots[0] is None
+    assert len(player.hand) == 1
+    assert player.hand[0]["id"] == original["id"]
+    assert player.hand[0] is original
+    assert player.hand[0]["health"] == health_before * 2
+    assert game.hero_powers.get_rule(PYRAMAD_BRICK_BY_BRICK) is not None
+
+
+def test_lich_bazhial_steals_a_tavern_card_and_takes_damage():
+    game, player = setup_game(58044)
+    player.tavern.slots[0] = game.pool.get_random_minion(tier=1)
+    target = game.effects.resolve_target_ref(0, EffectZone.TAVERN, 0)
+    durability_before = player.health + player.armor
+    game.use_hero_power(0, target_ref=target)
+    assert player.tavern.slots[0] is None
+    assert len(player.hand) == 1
+    assert player.health + player.armor == durability_before - 2
+    assert game.hero_powers.get_rule(LICH_BAZHIAL_GRAVEYARD_SHIFT) is not None
+
+
+def test_xyrella_sets_stolen_tavern_minion_to_two_two():
+    game, player = setup_game(70956)
+    player.tavern.slots[0] = game.pool.get_random_minion(tier=1)
+    target = game.effects.resolve_target_ref(0, EffectZone.TAVERN, 0)
+    game.use_hero_power(0, target_ref=target)
+    assert player.tavern.slots[0] is None
+    assert [(card["attack"], card["health"]) for card in player.hand] == [(2, 2)]
+    assert game.hero_powers.get_rule(XYRELLA_SEE_THE_LIGHT) is not None
+
+
+def test_deathwing_draft_is_not_registered_until_permanence_is_supported():
+    game, player = setup_game(60369)
+    own = game.effects.create_card(120031)
+    enemy = game.effects.create_card(120031)
+    side_a = game.combat.engine.create_side(0, 1, [own])
+    side_b = game.combat.engine.create_side(1, 1, [enemy])
+    game.events.emit(GameEvent.COMBAT_START, side_a=side_a, side_b=side_b)
+    assert side_a.board[0]["attack"] == 2
+    assert side_b.board[0]["attack"] == 2
+    assert game.hero_powers.get_rule(DEATHWING_ALL_WILL_BURN) is None
+
+
+def test_alakir_marks_leftmost_combat_minion():
+    game, player = setup_game(64403)
+    first = game.effects.create_card(120031)
+    second = game.effects.create_card(120031)
+    side_a = game.combat.engine.create_side(0, 1, [first, second])
+    side_b = game.combat.engine.create_side(1, 1, [])
+    game.events.emit(GameEvent.COMBAT_START, side_a=side_a, side_b=side_b)
+    assert game.effects.has_keyword(side_a.board[0], "Windfury")
+    assert game.effects.has_keyword(side_a.board[0], "Divine Shield")
+    assert game.effects.has_keyword(side_a.board[0], "Taunt")
+    assert not game.effects.has_keyword(side_a.board[1], "Taunt")
+    assert game.hero_powers.get_rule(ALAKIR_SWATTING_INSECTS) is not None
+
+
+def test_wagtoggle_draft_is_not_registered_until_progression_is_supported():
+    game, player = setup_game(57924)
+    beast = game.effects.create_card(120031)
+    beast["minionTypes"] = ["Beast"]
+    mech = game.effects.create_card(120031)
+    mech["minionTypes"] = ["Mech"]
+    side_a = game.combat.engine.create_side(0, 1, [beast, mech])
+    side_b = game.combat.engine.create_side(1, 1, [])
+    game.events.emit(GameEvent.COMBAT_START, side_a=side_a, side_b=side_b)
+    assert (side_a.board[0]["attack"], side_a.board[0]["health"]) == (2, 2)
+    assert (side_a.board[1]["attack"], side_a.board[1]["health"]) == (2, 2)
+    assert game.hero_powers.get_rule(QUEEN_WAGTOGGLE_WAX_WARBAND) is None
+
+
+def test_lady_vashj_generates_a_spellcraft_spell_at_turn_start():
+    game, player = setup_game(85125)
+    game.events.emit(GameEvent.TURN_START, player_id=0)
+    assert len(player.hand) == 1
+    assert player.hand[0]["cardType"] == "spell"
+    assert "spellcraft" in {
+        str(value).casefold() for value in player.hand[0].get("categories", [])
+    }
+    assert game.hero_powers.get_rule(LADY_VASHJ_RELICS_OF_THE_DEEP) is not None
+
+
+def test_voone_copies_leftmost_hand_card_every_three_turns():
+    game, player = setup_game(99033)
+    original = game.effects.create_card(120031)
+    player.hand = [original]
+    for turn in range(1, 3):
+        game.events.emit(GameEvent.TURN_END, player_id=0, round_number=turn)
+        assert len(player.hand) == 1
+    game.events.emit(GameEvent.TURN_END, player_id=0, round_number=3)
+    assert len(player.hand) == 2
+    assert player.hand[1]["id"] == original["id"]
+    assert player.hand[1] is not original
+    assert game.hero_powers.get_rule(ROCK_MASTER_VOONE_UPBEAT_HARMONY) is not None
+
+
+def test_shudderwock_targets_a_friendly_battlecry_minion():
+    game, player = setup_game(58027)
+    game.round_number = 3
+    battlecry = game.effects.create_card(122285)
+    player.board[0] = battlecry
+    target = game.effects.resolve_target_ref(0, EffectZone.BOARD, 0)
+    game.use_hero_power(0, target_ref=target)
+    assert game.hero_powers.uses_this_turn(0) == 1
+    assert game.hero_powers.get_rule(SHUDDERWOCK_SNICKER_SNACK) is not None
+
+
+def test_rat_king_discovers_from_rotating_minion_type():
+    game, player = setup_game(57893)
+    game.active_minion_types = (
+        "Beast", "Demon", "Dragon", "Elemental", "Mech",
+        "Murloc", "Naga", "Pirate", "Quilboar", "Undead",
+    )
+    game.pool.active_minion_types = game.active_minion_types
+    game.round_number = 1
+    game.use_hero_power(0)
+    choice = game.effects.get_pending_choice(0)
+    assert choice is not None
+    assert len(choice.options) == 3
+    assert all(game.effects.is_minion_type(card, "Beast") for card in choice.options)
+    assert game.hero_powers.get_rule(RAT_KING_A_TALE_OF_KINGS) is not None
+
+
+def test_captain_eudora_draft_is_unavailable():
+    game, player = setup_game(62242)
+    gold_before = player.gold
+    with pytest.raises(ValueError):
+        game.use_hero_power(0)
+    assert player.hand == []
+    assert player.gold == gold_before
+    assert game.hero_powers.uses_this_game(0) == 0
+    assert not power_actions(game)
+    assert game.hero_powers.get_rule(CAPTAIN_EUDORA_BURIED_TREASURE) is None

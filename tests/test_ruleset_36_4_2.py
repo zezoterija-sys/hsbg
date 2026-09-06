@@ -59,8 +59,10 @@ def test_missing_generated_hero_powers_are_repaired():
     tavish = by_name["Tavish Stormpike"]["power"]
 
     assert rakanishu["name"] == "Tavern Lighting"
+    assert rakanishu["id"] == 122960
     assert "every 3 turns" in rakanishu["text"]
     assert tavish["name"] == "Lock and Load"
+    assert tavish["id"] == 123150
     assert "Remove a minion in the Tavern" in tavish["text"]
 
 

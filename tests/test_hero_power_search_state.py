@@ -21,6 +21,8 @@ def make_game():
     player = game.get_player(0)
     # A controlled fixture avoids depending on the shuffled hero offers.
     player.hero = 57929  # George
+    from game.heroes import HEROES
+    player.set_hero_power(HEROES[57929]["power"])
     player.hero_power_cost = 1
     player.gold = 10
     player.board[0] = game.effects.create_card(120031)
