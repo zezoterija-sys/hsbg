@@ -1,6 +1,7 @@
-"""Focused pool-accounting regressions for ordinary triples."""
+"""Focused pool-accounting and special-combination triple regressions."""
 
 from game.bob import Bob
+from game.triples import ELEMENTAL_OF_SURPRISE
 
 
 def initialized_game():
@@ -9,6 +10,20 @@ def initialized_game():
     for player in game.players:
         game.choose_hero(player.player_id, player.hero_choices[0])
     return game
+
+
+def elemental_ids(game, count=2):
+    ids = []
+    for card in game.pool.card_definitions:
+        card_id = card.get("id")
+        if (card.get("cardType") == "minion"
+                and card_id != ELEMENTAL_OF_SURPRISE
+                and game.effects.is_minion_type(card, "Elemental")
+                and card_id not in ids):
+            ids.append(card_id)
+            if len(ids) == count:
+                return ids
+    raise AssertionError("Test database does not contain enough Elementals.")
 
 
 def test_mixed_triple_sale_returns_only_physical_pool_components():
@@ -60,3 +75,60 @@ def test_fully_generated_triple_sale_returns_no_pool_copies():
     game.sell_minion(0, 0)
 
     assert game.pool.available_count() == before
+
+
+def test_one_surprise_completes_pair_and_keeps_surprise_enchantment_delta():
+    game = initialized_game()
+    player = game.get_player(0)
+    target_id = elemental_ids(game, 1)[0]
+    target_base = game.effects._definition_by_id(target_id)
+
+    pair = [game.effects.create_card(target_id) for _ in range(2)]
+    surprise = game.effects.create_card(ELEMENTAL_OF_SURPRISE)
+    game.effects.apply_buff(surprise, attack=5, health=7)
+    player.hand = pair + [surprise]
+
+    game.triples.resolve(0)
+
+    assert len(player.hand) == 1
+    golden = player.hand[0]
+    assert golden["id"] == target_id
+    assert golden["isGolden"]
+    assert golden["attack"] == target_base["attackGold"] + 5
+    assert golden["health"] == target_base["healthGold"] + 7
+    assert sorted(golden["_triple_component_ids"]) == sorted(
+        [target_id, target_id, ELEMENTAL_OF_SURPRISE]
+    )
+
+
+def test_two_surprises_complete_one_elemental_into_that_elemental():
+    game = initialized_game()
+    player = game.get_player(0)
+    target_id = elemental_ids(game, 1)[0]
+    player.hand = [
+        game.effects.create_card(target_id),
+        game.effects.create_card(ELEMENTAL_OF_SURPRISE),
+        game.effects.create_card(ELEMENTAL_OF_SURPRISE),
+    ]
+
+    game.triples.resolve(0)
+
+    assert len(player.hand) == 1
+    assert player.hand[0]["id"] == target_id
+    assert player.hand[0]["isGolden"]
+
+
+def test_one_surprise_does_not_merge_two_different_elementals():
+    game = initialized_game()
+    player = game.get_player(0)
+    first_id, second_id = elemental_ids(game, 2)
+    player.hand = [
+        game.effects.create_card(first_id),
+        game.effects.create_card(second_id),
+        game.effects.create_card(ELEMENTAL_OF_SURPRISE),
+    ]
+
+    game.triples.resolve(0)
+
+    assert len(player.hand) == 3
+    assert not any(card["isGolden"] for card in player.hand)
