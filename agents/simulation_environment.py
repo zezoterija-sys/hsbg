@@ -1170,46 +1170,24 @@ class DeterminizedBattlegroundsEnvironment:
         game: Bob,
         rng: random.Random,
     ) -> None:
-        effects = getattr(
+        # Normal Bob shares one RNG across these owners. Seed each distinct
+        # object once, preserving aliases while supporting separate component
+        # RNGs. The order is fixed so search seeds reproduce across processes.
+        combat = getattr(game, "combat", None)
+        owners = (
             game,
-            "effects",
-            None,
-        )
-        effects_rng = getattr(
-            effects,
-            "random",
-            None,
-        )
-        if hasattr(
-            effects_rng,
-            "seed",
-        ):
-            effects_rng.seed(
-                rng.getrandbits(64)
-            )
-
-        combat = getattr(
-            game,
-            "combat",
-            None,
-        )
-        engine = getattr(
+            getattr(game, "pool", None),
+            getattr(game, "effects", None),
             combat,
-            "engine",
-            None,
+            getattr(combat, "engine", None),
         )
-        combat_rng = getattr(
-            engine,
-            "random",
-            None,
-        )
-        if hasattr(
-            combat_rng,
-            "seed",
-        ):
-            combat_rng.seed(
-                rng.getrandbits(64)
-            )
+        seeded_ids = set()
+        for owner in owners:
+            world_rng = getattr(owner, "random", None)
+            seed = getattr(world_rng, "seed", None)
+            if callable(seed) and id(world_rng) not in seeded_ids:
+                seed(rng.getrandbits(64))
+                seeded_ids.add(id(world_rng))
 
     # ==================================================================
     # VALUE

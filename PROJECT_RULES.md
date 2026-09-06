@@ -15,8 +15,11 @@ are deliberately changed.
 
 ## Work order
 
-- Current authorized implementation scope: ordinary triples and Triple Rewards.
-  Hero powers, Trinkets and Dark Gifts are on hold until the user resumes them.
+- Current authorized change: apply the prepared P0 RNG ownership fix and record
+  Hero Power preparation. Hero Power content implementation is not started by
+  this change. Trinkets and Dark Gifts remain on hold.
+- Hero Power target: Battlegrounds patch 36.4.2 Solos, implemented from ordinary
+  to complex using shared engine primitives. See `docs/hero-power-preparation.md`.
 - Run focused checks for changes; leave full suites, multi-game simulations,
   benchmarks and training runs to the user.
 - Complete and validate current Solos game rules and active mechanics first.
@@ -42,8 +45,9 @@ are deliberately changed.
 
 1. Preserve simulator/AI infrastructure that is necessary for execution,
    determinism, performance, and fair agent interaction.
-2. Within those constraints, match the current live Hearthstone Battlegrounds
-   Solos rules and active content as accurately as practical.
+2. Within those constraints, match the agreed Hearthstone Battlegrounds patch
+   36.4.2 Solos target as accurately as practical. Updates to later patches are
+   separate decisions; do not silently mix newer behavior into this target.
 3. Infrastructure abstractions such as action budgets and collision scheduling
    are implementation tools, not Hearthstone mechanics, and may be redesigned
    if their purpose is preserved more cleanly.

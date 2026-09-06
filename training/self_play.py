@@ -326,8 +326,11 @@ class SelfPlayRunner:
         )
 
         with self._global_random_scope(game_seed):
+            # Seed before construction/initialization: lobby rolls and hero
+            # offers happen before the later component reseeding step.
             game = Bob(
-                cards_file=self.config.cards_file
+                cards_file=self.config.cards_file,
+                seed=game_seed,
             )
             game.initialize_game()
             self._seed_real_game_components(
@@ -1293,9 +1296,9 @@ class SelfPlayRunner:
         seed: int,
     ):
         """
-        Bob/CardPool currently use module-global random in several places.
-        Preserve the caller's random state while making one self-play game
-        deterministic from its game seed.
+        Preserve the caller's module-global random state for legacy consumers.
+        Bob owns a separate RNG and must also receive the game seed before
+        initialization; this compatibility scope does not seed that RNG.
         """
         previous = random.getstate()
 
