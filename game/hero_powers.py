@@ -83,16 +83,25 @@ class HeroPowerSystem:
 
         current = getattr(game, cls.ATTRIBUTE_NAME, None)
         if isinstance(current, cls):
+            # The direct-call guard is intentionally installed lazily with the
+            # lifecycle system so normal Bob, tests, and MCTS template worlds
+            # all get the same legality enforcement without changing Bob's
+            # core routing implementation.
+            from .hero_power_guard import install_hero_power_use_guard
+
+            install_hero_power_use_guard(game)
             return current
 
         system = cls(game)
         setattr(game, cls.ATTRIBUTE_NAME, system)
 
-        # Local import avoids a module-import cycle. The registry immediately
-        # calls for_game() again, which now returns the attached system and then
-        # performs one idempotent content registration pass.
+        # Local imports avoid module-import cycles. The content registry calls
+        # for_game() again, which now returns the attached system and performs
+        # one idempotent registration pass.
         from .hero_power_effects import register_audited_hero_power_effects
+        from .hero_power_guard import install_hero_power_use_guard
 
+        install_hero_power_use_guard(game)
         register_audited_hero_power_effects(game)
         return system
 
