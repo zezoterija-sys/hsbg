@@ -1,7 +1,7 @@
 """Hero Power lifecycle regression tests.
 
 These tests deliberately use a real hero definition but no hero-specific effect
-handler.  They verify that printed data alone is not enough to expose a Hero
+handler. They verify that printed data alone is not enough to expose a Hero
 Power action and that the generic lifecycle controller owns legality/use state.
 """
 
@@ -90,9 +90,12 @@ def test_emitted_use_is_recorded_and_default_once_per_turn_limit_blocks_second_u
     game, player, hero_powers = _game(round_number=5)
     hero_powers.register_active(GEORGE_POWER_ID)
 
-    action = _hero_power_action(game)
+    # ActionSpace legality is checked here, while the actual emitted-use state
+    # is exercised directly through Bob.use_hero_power so this isolated unit
+    # test does not depend on a live RecruitScheduler phase fixture.
+    _hero_power_action(game)
     gold_before = player.gold
-    game.execute_action(0, action)
+    game.use_hero_power(0)
 
     assert player.gold == gold_before - 1
     assert hero_powers.uses_this_turn(0) == 1
