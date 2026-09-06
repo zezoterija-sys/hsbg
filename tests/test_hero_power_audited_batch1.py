@@ -148,6 +148,67 @@ def test_george_is_targeted_costs_one_and_is_legal_only_once_per_turn():
     assert len(_hero_power_actions(game)) == 2
 
 
+def test_george_once_per_turn_is_enforced_through_real_scheduler_action_flow():
+    game = Bob(cards_file=str(CARDS_FILE), seed=4402)
+    game.create_players()
+    game.phase = "recruit"
+    game.round_number = 5
+    game.priority_order = list(range(8))
+    hero_powers = register_audited_hero_power_effects(game)
+
+    for player in game.players:
+        player.set_gold(10)
+    george = game.get_player(0)
+    george.set_hero(GEORGE)
+    george.board[0] = game.effects.create_card(120031)
+
+    game.scheduler.begin_phase(range(8))
+    for player in game.players:
+        player.bind_recruit_scheduler(game.scheduler)
+    game.update_all_action_spaces()
+
+    first_use = next(
+        action
+        for action in game.get_player_action_space(0)
+        if action.action_type == ActionType.HERO_POWER
+    )
+    submissions = [(0, first_use)]
+    for player_id in range(1, 8):
+        submissions.append(
+            (
+                player_id,
+                next(
+                    action
+                    for action in game.get_player_action_space(player_id)
+                    if action.action_type == ActionType.END_TURN
+                ),
+            )
+        )
+
+    game.resolve_action_batch(submissions)
+
+    assert game.phase == "recruit"
+    assert game.scheduler.logical_time(0) == 1
+    assert game.recruitment.eligible_player_ids() == (0,)
+    assert hero_powers.uses_this_turn(0) == 1
+    assert not any(
+        action.action_type == ActionType.HERO_POWER
+        for action in game.get_player_action_space(0)
+    )
+
+    # A new recruit turn gets a fresh once-per-turn allowance.
+    game.round_number = 6
+    game.scheduler.begin_phase(range(8))
+    for player in game.players:
+        player.bind_recruit_scheduler(game.scheduler)
+    game.update_all_action_spaces()
+    assert hero_powers.uses_this_turn(0) == 0
+    assert any(
+        action.action_type == ActionType.HERO_POWER
+        for action in game.get_player_action_space(0)
+    )
+
+
 def test_george_requires_gold_and_a_friendly_board_target():
     game, player, hero_powers = _game(GEORGE, gold=0)
     player.board[0] = game.effects.create_card(120031)
