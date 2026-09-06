@@ -171,6 +171,7 @@ class TripleSystem:
         card = event.get("card")
         if (self.game.phase == "recruit" and isinstance(card, dict)
                 and card.get("cardType") == "minion" and self.game.effects.is_golden(card)
+                and card.get("_triple_component_ids")
                 and not card.get("_no_triple_reward")
                 and not card.get("_dark_gift_no_triple_reward")):
             self.grant_reward(event.get("player_id"))
