@@ -10,8 +10,9 @@ from .actions import ActionType
 from .card_effects import register_card_effects
 from .combat import Combat
 from .dark_gifts import DarkGiftSystem
-from .effects import EffectSystem
+from .effects import EffectSystem, EffectZone, TargetContext
 from .events import EventDispatcher, GameEvent
+from .hero_powers import HeroPowerSystem
 from .heroes import HEROES
 from .lobby import roll_active_minion_types
 from .player import Player
@@ -78,156 +79,104 @@ class Bob:
 
         # Recruitment creates and exposes self.scheduler.
         self.recruitment = Recruitment(self)
-
-        self.combat = Combat(
-            self,
-            events=self.events,
-            rng=self.random,
-        )
+        self.scheduler = self.recruitment.scheduler
+        self.combat = Combat(self)
 
     # =========================================================
-    # GAME INITIALIZATION
+    # PLAYER / GAME INITIALIZATION
     # =========================================================
-
-    def initialize_game(self):
-        """Initialize a new game and begin hero selection."""
-
-        # Reinitializing a seeded Bob reproduces the same game stream.
-        self.random.seed(self.seed)
-
-        self.round_number = 0
-        self.phase = "hero_selection"
-        self.game_over = False
-        self.last_combat_result = None
-
-        self.events.clear_history()
-        self.effects.reset_runtime_state_for_new_game()
-        self.dark_gifts.reset()
-
-        # Minion types are public game state and must be selected before hero
-        # offers and before any Tavern cards are drawn.
-        self.active_minion_types = roll_active_minion_types(self.random)
-
-        self.pool = CardPool(
-            cards_file=str(self.pool.cards_file),
-            rng=self.random,
-            active_minion_types=self.active_minion_types,
-        )
-
-        self.combat = Combat(
-            self,
-            events=self.events,
-            rng=self.random,
-        )
-
-        self.scheduler.clear()
-        self.hero_pool = self._solos_hero_ids()
-        self.create_players()
-        self.generate_priority_order()
-
-        self.events.emit(
-            GameEvent.GAME_START,
-            source=self,
-            player_count=self.PLAYER_COUNT,
-            active_minion_types=self.active_minion_types,
-        )
-        self.events.emit(
-            GameEvent.HERO_SELECTION_START,
-            source=self,
-            priority_order=self.priority_order.copy(),
-            active_minion_types=self.active_minion_types,
-        )
-
-        self.prepare_hero_selection()
 
     def create_players(self):
-        self.players = [Player(player_id) for player_id in range(self.PLAYER_COUNT)]
-
-    # =========================================================
-    # PLAYERS
-    # =========================================================
+        self.players = [
+            Player(player_id)
+            for player_id in range(self.PLAYER_COUNT)
+        ]
+        return self.players
 
     def get_player(self, player_id):
-        if player_id < 0 or player_id >= len(self.players):
-            raise ValueError("Invalid player ID.")
         return self.players[player_id]
-
-    def is_player_active(self, player_id):
-        return not self.get_player(player_id).eliminated
 
     def get_alive_players(self):
         return [player for player in self.players if not player.eliminated]
 
-    # =========================================================
-    # PRIVATE RESOLUTION PRIORITY
-    # =========================================================
+    def initialize_game(self):
+        self.create_players()
+        self.round_number = 0
+        self.phase = "hero_selection"
+        self.game_over = False
+        self.last_combat_result = None
+        self.priority_order = []
 
-    def generate_priority_order(self):
-        """Generate a seeded private resolution order."""
+        self.effects.reset_runtime_state_for_new_game()
+        self.events.emit(
+            GameEvent.GAME_START,
+            source=self,
+            player_count=self.PLAYER_COUNT,
+        )
 
-        self.priority_order = list(range(self.PLAYER_COUNT))
-        self.random.shuffle(self.priority_order)
-
-    def get_priority_position(self, player_id):
-        self.get_player(player_id)
-        try:
-            return self.priority_order.index(player_id)
-        except ValueError as exc:
-            raise ValueError(
-                f"Player {player_id} is missing from priority order."
-            ) from exc
+        self._prepare_hero_selection()
+        return self.get_state()
 
     # =========================================================
     # HERO SELECTION
     # =========================================================
 
-    def prepare_hero_selection(self):
-        """Give every player four unique hero choices in priority order."""
-
-        available_heroes = list(self.hero_pool)
-
-        for player_id in self.priority_order:
-            player = self.get_player(player_id)
-
-            if len(available_heroes) < 4:
-                raise ValueError("Not enough heroes available for hero selection.")
-
-            choices = self.random.sample(available_heroes, 4)
-            player.hero_choices = choices
-
-            for hero_id in choices:
-                available_heroes.remove(hero_id)
-
     def _solos_hero_ids(self):
         return [
-            hero_id for hero_id in HEROES
-            if (definition := self.pool.card_definitions_by_id.get(hero_id))
-            and definition.get("pool") is True
-            and not definition.get("isDuosOnly", False)
+            hero_id
+            for hero_id, hero in HEROES.items()
+            if not hero.get("isDuosOnly", False)
         ]
 
+    def _prepare_hero_selection(self):
+        if len(self.players) != self.PLAYER_COUNT:
+            raise ValueError("Bob requires exactly 8 players before hero selection.")
+
+        self.phase = "hero_selection"
+        self.generate_priority_order()
+
+        available = self._solos_hero_ids()
+        self.random.shuffle(available)
+        needed = self.PLAYER_COUNT * 4
+        if len(available) < needed:
+            raise RuntimeError("Not enough unique heroes for four choices per player.")
+
+        cursor = 0
+        for player_id in self.priority_order:
+            player = self.get_player(player_id)
+            player.hero_choices = available[cursor : cursor + 4]
+            cursor += 4
+
+        self.hero_pool = [
+            hero_id
+            for hero_id in self._solos_hero_ids()
+            if hero_id not in {
+                choice
+                for player in self.players
+                for choice in player.hero_choices
+            }
+        ]
+
+        self.events.emit(
+            GameEvent.HERO_SELECTION_START,
+            source=self,
+            priority_order=self.priority_order.copy(),
+        )
+
     def choose_hero(self, player_id, hero_id):
-        """Choose one offered hero. Hero selection is not recruit AP."""
+        if self.phase != "hero_selection":
+            raise ValueError("Heroes can only be chosen during hero selection.")
 
         player = self.get_player(player_id)
-
-        if self.phase != "hero_selection":
-            raise ValueError("It is not hero selection.")
         if player.hero is not None:
             raise ValueError("Player already selected a hero.")
         if hero_id not in player.hero_choices:
-            raise ValueError("That hero was not offered to this player.")
+            raise ValueError("Hero was not offered to this player.")
 
+        unchosen = [choice for choice in player.hero_choices if choice != hero_id]
         player.set_hero(hero_id)
-
-        if hero_id in self.hero_pool:
-            self.hero_pool.remove(hero_id)
-
-        for other_hero in player.hero_choices:
-            if other_hero != hero_id and other_hero not in self.hero_pool:
-                self.hero_pool.append(other_hero)
-
         player.hero_choices = []
+        self.hero_pool.extend(unchosen)
 
         self.events.emit(
             GameEvent.HERO_SELECTED,
@@ -237,124 +186,193 @@ class Bob:
             hero_id=hero_id,
         )
 
-        self.check_hero_selection_complete()
-
-    def check_hero_selection_complete(self):
-        if any(player.hero is None for player in self.players):
-            return
-        self.start_recruit_phase()
+        if all(player.hero is not None for player in self.players):
+            self.recruitment.start()
 
     # =========================================================
-    # RECRUITMENT / COMBAT LOOP
+    # PRIORITY / ACTION SPACES
     # =========================================================
 
-    def start_recruit_phase(self):
-        if self.game_over:
-            return
-
-        before_taverns = {
-            player.player_id: list(player.tavern.slots)
+    def generate_priority_order(self):
+        self.priority_order = [
+            player.player_id
             for player in self.players
-            if hasattr(player, "tavern")
-        }
-
-        self.recruitment.start()
-
-        for player in self.players:
-            if not hasattr(player, "tavern"):
-                continue
-            self._emit_tavern_card_appearances(
-                player.player_id,
-                before_taverns.get(player.player_id, []),
-            )
-
-    def end_recruit_phase(self):
-        if self.game_over:
-            return
-        return self.combat_phase()
-
-    def combat_phase(self):
-        self.phase = "combat"
-        result = self.combat.run_round()
-        self.last_combat_result = result
-
-        if result.game_over:
-            self.game_over = True
-            self.phase = "game_over"
-            return result
-
-        self.start_recruit_phase()
-        return result
-
-    # =========================================================
-    # ACTION SPACE
-    # =========================================================
+            if not player.eliminated
+        ]
+        self.random.shuffle(self.priority_order)
+        self.combat.set_priority_order(self.priority_order)
+        return self.priority_order
 
     def update_action_space(self, player_id):
         player = self.get_player(player_id)
-        player.action_space.generate_for_player(
-            player=player,
-            game_state=self,
-        )
+        player.action_space.update(player, self)
+        return player.action_space.get_actions()
 
     def update_all_action_spaces(self):
         for player in self.players:
             self.update_action_space(player.player_id)
 
     def get_player_action_space(self, player_id):
-        return self.get_player(player_id).action_space.get_legal_actions()
+        return self.get_player(player_id).action_space.get_actions()
 
     # =========================================================
-    # ACTION EXECUTION
+    # ACTION EXECUTION / BATCH RESOLUTION
     # =========================================================
 
-    def _has_pending_choice(self, player_id):
-        return self.effects.get_pending_choice(player_id) is not None
+    @staticmethod
+    def _action_target_ref(action):
+        if action.effect_target_zone is None:
+            return None
+        try:
+            zone = EffectZone(action.effect_target_zone)
+        except ValueError as exc:
+            raise ValueError(f"Unknown effect target zone: {action.effect_target_zone}") from exc
+        return TargetRef(
+            player_id=action.effect_target_player_id,
+            zone=zone,
+            index=action.effect_target_idx,
+            card=None,
+        )
+
+    def _resolve_action_target_ref(self, action):
+        if action.effect_target_zone is None:
+            return None
+        try:
+            zone = EffectZone(action.effect_target_zone)
+        except ValueError as exc:
+            raise ValueError(f"Unknown effect target zone: {action.effect_target_zone}") from exc
+        return self.effects.resolve_target_ref(
+            action.effect_target_player_id,
+            zone,
+            action.effect_target_idx,
+        )
 
     def _validate_action(self, player_id, action):
-        """Validate an action against the shared pre-action state."""
-
         player = self.get_player(player_id)
-        if player.eliminated:
-            raise ValueError("Eliminated player cannot act.")
+        if not isinstance(action, Action):
+            raise ValueError("Action must be an Action instance.")
+        if action not in player.action_space.get_actions():
+            raise ValueError(f"Action is not currently legal for player {player_id}: {action}")
 
-        if not player.action_space.is_legal_action(action):
-            raise ValueError(f"Illegal action for player {player_id}: {action}")
+    def execute_action(self, player_id, action):
+        return self.resolve_action_batch([(player_id, action)])[0]
 
-        if self.phase == "recruit" and self.scheduler.has_player(player_id):
-            eligible = set(self.recruitment.eligible_player_ids())
-            if player_id not in eligible:
-                raise ValueError(
-                    f"Player {player_id} is not eligible at the current logical time."
-                )
+    def resolve_action_batch(self, submissions):
+        submissions = list(submissions)
+        if not submissions:
+            return []
 
-            if not self.scheduler.can_submit(
-                player_id,
-                action,
-                pending_choice=self._has_pending_choice(player_id),
-            ):
-                raise ValueError(
-                    f"Recruit scheduler rejected player {player_id}: {action}"
-                )
+        player_ids = [player_id for player_id, _ in submissions]
+        if len(player_ids) != len(set(player_ids)):
+            raise ValueError("A player may submit at most one action per batch.")
+
+        eligible = set(self.recruitment.eligible_player_ids())
+        if set(player_ids) != eligible:
+            raise ValueError(
+                "Batch submissions must match exactly the scheduler-eligible players."
+            )
+
+        # Validate every action against the same pre-action state before any
+        # shared-state mutation occurs.
+        for player_id, action in submissions:
+            self._validate_action(player_id, action)
+
+        by_player = dict(submissions)
+        results = []
+        for player_id in self.priority_order:
+            action = by_player.get(player_id)
+            if action is None:
+                continue
+
+            results.append(self._execute_validated_action(player_id, action))
+            if self.game_over:
+                break
+
+        return results
+
+    # Backward-compatible alias used by older tests/tools.
+    resolve_collision_batch = resolve_action_batch
 
     def _execute_validated_action(self, player_id, action):
-        """Execute an action already validated against the pre-action state."""
-
         player = self.get_player(player_id)
 
-        # Commit artificial interaction time before resolving triggered effects.
-        # This preserves the previous useful invariant without making the budget
-        # a Hearthstone Player resource.
-        if self.phase == "recruit" and self.scheduler.has_player(player_id):
-            self.scheduler.commit_action(player_id, action)
-        elif action.action_type == ActionType.END_TURN:
-            player.end_turn()
-        elif action.interaction_cost:
-            # Compatibility for isolated legacy tests without Recruitment.
-            player.spend_ap(action.interaction_cost)
+        if action.action_type == ActionType.CHOOSE_OPTION:
+            self.effects.resolve_choice(player_id, action.option_idx)
+            self.scheduler.note_continuation(player_id)
 
-        if action.action_type != ActionType.END_TURN:
-            self.resolve_action(player_id, action)
+        elif action.action_type == ActionType.END_TURN:
+            self.recruitment.player_end_turn(player_id)
+
+        elif action.action_type == ActionType.REFRESH:
+            self.refresh(player_id)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.BUY_MINION:
+            self.buy_minion(player_id, action.target_idx)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.BUY_SPELL:
+            self.buy_spell(player_id)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.SELL_MINION:
+            self.sell_minion(player_id, action.target_idx)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.PLAY_MINION:
+            self.play_minion(
+                player_id,
+                action.target_idx,
+                action.position_idx,
+                target_ref=self._resolve_action_target_ref(action),
+            )
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.CAST_SPELL:
+            self.cast_spell(
+                player_id,
+                action.target_idx,
+                target_ref=self._resolve_action_target_ref(action),
+            )
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.ACTIVATE:
+            self.effects.resolve_activate(
+                player_id,
+                action.target_idx,
+                target_ref=self._resolve_action_target_ref(action),
+            )
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.HERO_POWER:
+            self.use_hero_power(
+                player_id,
+                target_ref=self._resolve_action_target_ref(action),
+            )
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.DARK_GIFT:
+            self.dark_gifts.open_offer(player_id)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.FREEZE:
+            self.freeze(player_id)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.UNFREEZE:
+            self.unfreeze(player_id)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.UPGRADE_TAVERN:
+            self.upgrade_tavern(player_id)
+            self.scheduler.commit_interaction(player_id)
+
+        elif action.action_type == ActionType.REPOSITION:
+            self.reposition(player_id, action.target_idx, action.position_idx)
+            self.scheduler.commit_interaction(player_id)
+
+        else:
+            raise ValueError(f"Unsupported action type: {action.action_type}")
 
         self.events.emit(
             GameEvent.ACTION_RESOLVED,
@@ -364,128 +382,11 @@ class Bob:
             action=action,
         )
 
-    def execute_action(self, player_id, action):
-        """Execute one scheduler-eligible action immediately."""
-
-        self._validate_action(player_id, action)
-        self._execute_validated_action(player_id, action)
-        self.update_all_action_spaces()
-        self.recruitment.check_complete()
-
-    def resolve_action_batch(self, submissions):
-        """Resolve one logical-time batch from a shared pre-action state.
-
-        Every submission is validated before any is executed. The private seeded
-        phase priority is used only to make shared-state races deterministic.
-        """
-
-        if not submissions:
-            return []
-
-        seen_players = set()
-        for player_id, action in submissions:
-            if player_id in seen_players:
-                raise ValueError(
-                    f"Player {player_id} submitted multiple actions in one batch."
-                )
-            seen_players.add(player_id)
-            self._validate_action(player_id, action)
-
         if self.phase == "recruit":
-            ordered_submissions = self.scheduler.order_batch(
-                submissions,
-                self.priority_order,
-            )
-        else:
-            ordered_submissions = sorted(
-                submissions,
-                key=lambda submission: self.get_priority_position(submission[0]),
-            )
+            self.update_all_action_spaces()
+            self.recruitment.check_complete()
 
-        for player_id, action in ordered_submissions:
-            self._execute_validated_action(player_id, action)
-
-        self.update_all_action_spaces()
-        self.recruitment.check_complete()
-        return ordered_submissions
-
-    def execute_colliding_actions(self, submissions):
-        """Deprecated compatibility alias for ``resolve_action_batch``."""
-
-        return self.resolve_action_batch(submissions)
-
-    # =========================================================
-    # ACTION ROUTING
-    # =========================================================
-
-    def _target_ref_from_action(self, player_id, action):
-        if action.effect_target_idx is None:
-            return None
-
-        target_player_id = (
-            action.effect_target_player_id
-            if action.effect_target_player_id is not None
-            else player_id
-        )
-        target_zone = (
-            action.effect_target_zone
-            if action.effect_target_zone is not None
-            else "board"
-        )
-
-        return self.effects.resolve_target_ref(
-            target_player_id,
-            target_zone,
-            action.effect_target_idx,
-        )
-
-    def resolve_action(self, player_id, action):
-        action_type = action.action_type
-        target_ref = self._target_ref_from_action(player_id, action)
-
-        if action_type == ActionType.BUY_MINION:
-            self.buy_minion(player_id, action.target_idx)
-        elif action_type == ActionType.BUY_SPELL:
-            self.buy_spell(player_id)
-        elif action_type == ActionType.SELL_MINION:
-            self.sell_minion(player_id, action.target_idx)
-        elif action_type == ActionType.PLAY_MINION:
-            self.play_minion(
-                player_id,
-                action.target_idx,
-                action.position_idx,
-                target_ref=target_ref,
-            )
-        elif action_type == ActionType.CAST_SPELL:
-            self.cast_spell(
-                player_id,
-                action.target_idx,
-                target_ref=target_ref,
-            )
-        elif action_type == ActionType.HERO_POWER:
-            self.use_hero_power(player_id, target_ref=target_ref)
-        elif action_type == ActionType.ACTIVATE:
-            self.effects.resolve_activate(
-                player_id,
-                action.target_idx,
-                target_ref=target_ref,
-            )
-        elif action_type == ActionType.DARK_GIFT:
-            self.dark_gifts.use(player_id)
-        elif action_type == ActionType.CHOOSE_OPTION:
-            self.effects.resolve_choice(player_id, action.option_idx)
-        elif action_type == ActionType.REFRESH:
-            self.refresh(player_id)
-        elif action_type == ActionType.FREEZE:
-            self.freeze(player_id)
-        elif action_type == ActionType.UNFREEZE:
-            self.unfreeze(player_id)
-        elif action_type == ActionType.UPGRADE_TAVERN:
-            self.upgrade_tavern(player_id)
-        elif action_type == ActionType.REPOSITION:
-            self.reposition(player_id, action.target_idx, action.position_idx)
-        else:
-            raise ValueError(f"Unsupported action: {action_type}")
+        return action
 
     # =========================================================
     # BUY / SELL
@@ -802,9 +703,45 @@ class Bob:
 
     def use_hero_power(self, player_id, *, target_ref=None):
         player = self.get_player(player_id)
-        cost = player.hero_power_cost
         hero_power = player.get_hero_power()
+        if not isinstance(hero_power, dict):
+            raise ValueError("Player has no Hero Power.")
 
+        hero_powers = HeroPowerSystem.for_game(self)
+        hero_powers.validate_use(player_id)
+
+        power_id = hero_power.get("id")
+        has_target_rule = self.effects.has_target_rule(power_id)
+        if has_target_rule:
+            context = TargetContext(
+                game=self,
+                player_id=player_id,
+                source_card=hero_power,
+                source_zone=EffectZone.HERO_POWER,
+                action_kind="hero_power",
+            )
+            legal_refs = self.effects.get_valid_target_refs(power_id, context)
+            legal_keys = {
+                (ref.player_id, ref.zone, ref.index)
+                for ref in legal_refs
+            }
+            if target_ref is None or (
+                target_ref.player_id,
+                target_ref.zone,
+                target_ref.index,
+            ) not in legal_keys:
+                raise ValueError("Invalid Hero Power target.")
+            # Resolve the currently-live target from game state so callers
+            # cannot smuggle an arbitrary card object behind a legal index.
+            target_ref = self.effects.resolve_target_ref(
+                target_ref.player_id,
+                target_ref.zone,
+                target_ref.index,
+            )
+        elif target_ref is not None:
+            raise ValueError("This Hero Power does not take a target.")
+
+        cost = int(player.hero_power_cost or 0)
         self.effects.spend_gold(
             player_id,
             cost,
