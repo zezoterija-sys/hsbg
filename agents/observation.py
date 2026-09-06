@@ -111,6 +111,7 @@ class OwnPlayerView:
     effect_state: Mapping[str, Any]
     max_gold: int = 10
     hero_power_cost: int = 0
+    hero_power_state: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -464,6 +465,10 @@ class ObservationBuilder:
             max_gold=int(getattr(player, "max_gold", 10) or 10),
             hero_power_cost=int(
                 getattr(player, "hero_power_cost", 0) or 0
+            ),
+            hero_power_state=(
+                game.hero_powers.export_player_state(player.player_id)
+                if getattr(game, "hero_powers", None) is not None else {}
             ),
         )
 

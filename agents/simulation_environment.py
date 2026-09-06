@@ -46,6 +46,7 @@ from game.bob import Bob
 from game.pool import CardPool
 from game.dark_gift_effects import _ensure_registered as ensure_dark_gift_effects
 from game.effects import PendingChoice
+from game.hero_powers import HeroPowerSystem
 
 
 @dataclass
@@ -699,6 +700,9 @@ class DeterminizedBattlegroundsEnvironment:
             )
         )
         game.dark_gifts.uses_by_player[player.player_id] = int(effect_state.get("dark_gift_uses", 0))
+        HeroPowerSystem.for_game(game).restore_player_state(
+            player.player_id, getattr(view, "hero_power_state", {})
+        )
         if "dark_gift_last_used_turn" in effect_state:
             game.dark_gifts.last_used_turn[player.player_id] = int(effect_state["dark_gift_last_used_turn"])
         # Gift registrations are lazy in Bob. Restoring a gifted card must also

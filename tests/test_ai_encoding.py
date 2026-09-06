@@ -145,7 +145,7 @@ def test_observation_schema_encodes_identity_economy_and_effect_state():
     encoder = ObservationEncoder(vocabulary)
     encoded = encoder.encode(_observation())
 
-    assert ObservationEncoder.SCHEMA_VERSION == 4
+    assert ObservationEncoder.SCHEMA_VERSION == 5
     assert encoded.scalar_features.shape == (
         ObservationEncoder.SCALAR_FEATURE_SIZE,
     )

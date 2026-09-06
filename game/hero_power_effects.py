@@ -24,10 +24,14 @@ KAELTHAS_VERDANT_SPHERES = 61917
 OMU_EVERBLOOM = 63605
 HOGGARR_IM_THE_CAPN_NOW = 101132
 CENARIUS_WISDOM_OF_ANCIENTS = 116921
+BLACKTHORN_BLOODBOUND = 71459
+LICH_KING_REBORN_RITES = 58040
+PATCHWERK_ALL_PATCHED_UP = 59399
 
 # Generated reward IDs.
 TAVERN_COIN = 104436
 BRANN_BRONZEBEARD = 96786
+BLOOD_GEM = 70136
 
 
 def _same_player(ctx):
@@ -74,6 +78,17 @@ def _george_boon_of_light(ctx):
     target = ctx.event.get("target")
     if isinstance(target, dict):
         ctx.grant_keyword(target, "Divine Shield")
+
+
+def _blackthorn_bloodbound(ctx):
+    if _same_player(ctx):
+        for _ in range(2):
+            ctx.system.add_generated_to_hand(ctx.source_player_id, BLOOD_GEM)
+
+
+def _lich_king_reborn_rites(ctx):
+    if _same_player(ctx):
+        ctx.system.grant_keyword(ctx.event["target"], "Reborn", until_next_turn=True)
 
 
 def _gallywix_smart_savings(ctx):
@@ -271,6 +286,21 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
         zones=(EffectZone.HERO_POWER,),
         name="Dinotamer Brann — Battle Brand",
     )
+
+    hero_powers.register_active(BLACKTHORN_BLOODBOUND, max_uses_per_turn=2)
+    effects.register_effect(
+        BLACKTHORN_BLOODBOUND, GameEvent.HERO_POWER_USED, _blackthorn_bloodbound,
+        zones=(EffectZone.HERO_POWER,), name="Death Speaker Blackthorn — Bloodbound",
+    )
+    hero_powers.register_active(LICH_KING_REBORN_RITES)
+    effects.register_target_rule(LICH_KING_REBORN_RITES, _friendly_board_targets)
+    effects.register_effect(
+        LICH_KING_REBORN_RITES, GameEvent.HERO_POWER_USED, _lich_king_reborn_rites,
+        zones=(EffectZone.HERO_POWER,), name="The Lich King — Reborn Rites",
+    )
+    # Player.set_hero applies Patchwerk's 60 starting Health from the ruleset.
+    # Register passive classification only: an extra grant would double-count.
+    hero_powers.register_passive(PATCHWERK_ALL_PATCHED_UP)
 
     hero_powers._audited_content_registered = True
     return hero_powers

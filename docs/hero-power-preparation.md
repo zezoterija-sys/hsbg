@@ -11,9 +11,10 @@ separate “simple” and “complex” implementations. Simple powers are the f
 content batches; every batch uses the same lifecycle, event, targeting, choice,
 state, and observation contracts needed by complex powers.
 
-The prepared P0 RNG fix accompanies this document. This is a staged plan, not
-an implementation or authoritative per-hero coverage audit. Hero Power content
-work has not started in this change.
+The P0 RNG fix was applied in `c679e16`. This is a staged plan, not an
+authoritative per-hero coverage audit. Framework hardening and the first ordinary
+batch have now started; see `hero-power-ordinary-batch.md` for delivered scope,
+sources, tests, and remaining limitations.
 
 ## Current baseline
 
@@ -142,4 +143,3 @@ Do not mark a power implemented until all are present:
   preservation. Different actions can consume randomness differently: the
   same initial seed does not promise identical games under different policies.
 - Large simulations, full local suites, benchmarks, and training remain user-run.
-

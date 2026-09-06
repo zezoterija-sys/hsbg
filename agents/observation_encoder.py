@@ -1,7 +1,7 @@
 """
 Structured tensor encoding for AgentObservation.
 
-Schema v3 adds the public lobby's active minion types to the scalar features.
+Schema v5 adds own Hero Power use counters to the scalar features.
 Card/hero identity and own-mechanic state preserve the AI information firewall.
 Only information already present in AgentObservation is encoded.
 """
@@ -129,7 +129,7 @@ class EncodedObservation:
 class ObservationEncoder:
     """Convert AgentObservation into stable model tensors."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     # Fixed schema order, independent of future engine lobby rules.
     LOBBY_MINION_TYPES = (
@@ -295,6 +295,9 @@ class ObservationEncoder:
         "self_hand_count",
         "self_tavern_minion_count",
         "self_has_tavern_spell",
+        "self_hero_power_uses_turn",
+        "self_hero_power_uses_game",
+        "self_hero_power_extra_uses_turn",
     )
 
     CHOICE_SCALAR_NAMES = (
@@ -502,6 +505,9 @@ class ObservationEncoder:
             self._bounded_scale(self._present_count(player.hand), 10.0),
             self._bounded_scale(self._present_count(player.tavern_slots), 6.0),
             float(isinstance(player.tavern_spell, dict)),
+            self._bounded_scale(player.hero_power_state.get("uses_turn", 0), 10.0),
+            self._bounded_scale(player.hero_power_state.get("uses_game", 0), 100.0),
+            self._bounded_scale(player.hero_power_state.get("extra_uses_turn", 0), 10.0),
         ])
 
         pending = observation.pending_choice

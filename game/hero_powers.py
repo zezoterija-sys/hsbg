@@ -11,6 +11,7 @@ silently exposed as clickable no-op actions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 from enum import Enum
 from typing import Any, Callable
 
@@ -262,11 +263,16 @@ class HeroPowerSystem:
     # -----------------------------------------------------------------
 
     def can_use(self, player_id):
-        if getattr(self.game, "phase", None) != "recruit":
+        if getattr(self.game, "phase", None) != "recruit" or getattr(self.game, "game_over", False):
             return False
 
         player = self._player(player_id)
         if getattr(player, "eliminated", False):
+            return False
+        # Scheduler/AP eligibility is checked by Bob's action broker before it
+        # commits the interaction. Do not reject a valid final-budget action
+        # when its effect is resolved after that commitment.
+        if self.game.effects.get_pending_choice(player_id) is not None:
             return False
 
         power = self._power(player)
@@ -328,6 +334,8 @@ class HeroPowerSystem:
     # -----------------------------------------------------------------
 
     def arm(self, player_id, key, value=True):
+        # This state is visible to its owner and exported to search worlds.
+        # Hidden/opponent-only outcomes must not be stored here.
         if not isinstance(key, str) or not key:
             raise ValueError("Hero Power arm key must be a non-empty string.")
         state = self._armed.setdefault(int(player_id), {})
@@ -352,6 +360,36 @@ class HeroPowerSystem:
             self._armed.clear()
         else:
             self._armed.pop(int(player_id), None)
+
+    def export_player_state(self, player_id):
+        """Copy only one player's own visible lifecycle state, never RNGs/rules."""
+        return {
+            "power_id": self.power_id_for_player(player_id),
+            "round_number": self._round_number(),
+            "uses_game": self.uses_this_game(player_id),
+            "uses_turn": self.uses_this_turn(player_id),
+            "extra_uses_turn": self.extra_uses_this_turn(player_id),
+            "armed": deepcopy(self._armed.get(int(player_id), {})),
+        }
+
+    def restore_player_state(self, player_id, state):
+        """Restore an own-player observation without replaying effects or costs."""
+        player_id = int(player_id)
+        if state and state.get("power_id") != self.power_id_for_player(player_id):
+            raise ValueError("Hero Power state does not match the player's power.")
+        counts = {key: int(state.get(key, 0)) for key in (
+            "uses_game", "uses_turn", "extra_uses_turn",
+        )}
+        if any(value < 0 for value in counts.values()):
+            raise ValueError("Hero Power use counts cannot be negative.")
+        armed = deepcopy(state.get("armed", {}))
+        if not isinstance(armed, dict):
+            raise ValueError("Hero Power armed state must be a dictionary.")
+        round_number = int(state.get("round_number", self._round_number()))
+        self._uses_game[player_id] = counts["uses_game"]
+        self._uses_turn[player_id] = (round_number, counts["uses_turn"])
+        self._extra_uses_turn[player_id] = (round_number, counts["extra_uses_turn"])
+        self._armed[player_id] = armed
 
     # -----------------------------------------------------------------
     # New-game reset

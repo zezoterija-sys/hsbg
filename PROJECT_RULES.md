@@ -15,9 +15,9 @@ are deliberately changed.
 
 ## Work order
 
-- Current authorized change: apply the prepared P0 RNG ownership fix and record
-  Hero Power preparation. Hero Power content implementation is not started by
-  this change. Trinkets and Dark Gifts remain on hold.
+- Current authorized implementation scope: Hero Power framework checks and
+  ordinary Hero Powers, following the staged preparation plan. The P0 RNG fix
+  is applied. Trinkets and Dark Gifts remain on hold.
 - Hero Power target: Battlegrounds patch 36.4.2 Solos, implemented from ordinary
   to complex using shared engine primitives. See `docs/hero-power-preparation.md`.
 - Run focused checks for changes; leave full suites, multi-game simulations,

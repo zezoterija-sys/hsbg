@@ -36,9 +36,8 @@ def test_lobby_mask_has_fixed_schema_and_distinguishes_public_lobbies():
     game, observation = _observation()
     encoder = ObservationEncoder(CardVocabulary.from_cards_file())
     first = encoder.encode(observation)
-    # Schema v4 includes the public lobby mask plus visible Dark Gift/keyword
-    # card features. Do not silently reinterpret a v4 model as the older v3.
-    assert encoder.SCHEMA_VERSION == 4
+    # Schema v5 retains the lobby mask and adds own Hero Power use counters.
+    assert encoder.SCHEMA_VERSION == 5
     for tribe in encoder.LOBBY_MINION_TYPES:
         index = encoder.scalar_index(f"lobby_type_{tribe.lower()}")
         assert first.scalar_features[index] == float(tribe in game.active_minion_types)
