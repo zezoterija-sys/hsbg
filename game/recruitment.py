@@ -14,6 +14,7 @@ Only living players participate in recruitment.
 """
 
 from .events import GameEvent
+from .hero_power_effects import register_audited_hero_power_effects
 from .scheduler import RecruitScheduler
 
 
@@ -55,6 +56,11 @@ class Recruitment:
 
         self.bob.round_number += 1
         self.bob.phase = "recruit"
+
+        # Hero Power content must exist before TURN_START is emitted. Registering
+        # it lazily from ActionSpace would miss automatic/passive first-turn
+        # triggers such as Nozdormu's free Refresh.
+        register_audited_hero_power_effects(self.bob)
 
         self.generate_priority()
         self.prepare_players()
