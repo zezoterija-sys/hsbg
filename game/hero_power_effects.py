@@ -7,6 +7,7 @@ unavailable as actions) until their lifecycle/effect has a conformance test.
 
 from __future__ import annotations
 
+from .economy import install_economy_primitives
 from .effects import EffectZone, TargetRef
 from .events import GameEvent
 from .hero_powers import HeroPowerSystem
@@ -14,6 +15,7 @@ from .lobby import is_minion_available_for_lobby
 
 
 # Current power IDs from game/heroes.py.
+GALLYWIX_SMART_SAVINGS = 57559
 GEORGE_BOON_OF_LIGHT = 57562
 DINOTAMER_BRANN_BATTLE_BRAND = 60218
 FLURGL_GONE_FISHING = 60448
@@ -21,6 +23,7 @@ NOZDORMU_CLAIRVOYANCE = 61491
 KAELTHAS_VERDANT_SPHERES = 61917
 OMU_EVERBLOOM = 63605
 HOGGARR_IM_THE_CAPN_NOW = 101132
+CENARIUS_WISDOM_OF_ANCIENTS = 116921
 
 # Generated reward IDs.
 TAVERN_COIN = 104436
@@ -29,20 +32,6 @@ BRANN_BRONZEBEARD = 96786
 
 def _same_player(ctx):
     return ctx.event.get("player_id") == ctx.source_player_id
-
-
-def _gain_gold(ctx, amount):
-    """Gain shop-phase Gold without applying the 10-Gold start-turn ceiling.
-
-    Battlegrounds has allowed earned Gold to exceed 10 since Patch 24.2. The
-    player's ``max_gold`` value is the normal start-of-turn economy ceiling, not
-    a cap on Gold gained during recruitment.
-    """
-
-    player = ctx.game.get_player(ctx.source_player_id)
-    amount = max(0, int(amount or 0))
-    player.gold = int(getattr(player, "gold", 0) or 0) + amount
-    return amount
 
 
 def _friendly_board_targets(context):
@@ -87,6 +76,12 @@ def _george_boon_of_light(ctx):
         ctx.grant_keyword(target, "Divine Shield")
 
 
+def _gallywix_smart_savings(ctx):
+    if not _same_player(ctx):
+        return
+    ctx.system.queue_gold_next_turn(ctx.source_player_id, 1)
+
+
 def _nozdormu_clairvoyance(ctx):
     if not _same_player(ctx):
         return
@@ -96,7 +91,7 @@ def _nozdormu_clairvoyance(ctx):
 def _omu_everbloom(ctx):
     if not _same_player(ctx):
         return
-    _gain_gold(ctx, 2)
+    ctx.system.add_gold(ctx.source_player_id, 2)
 
 
 def _hoggarr_im_the_capn_now(ctx):
@@ -104,7 +99,13 @@ def _hoggarr_im_the_capn_now(ctx):
         return
     card = ctx.event.get("card") or ctx.event.get("minion")
     if isinstance(card, dict) and ctx.system.is_minion_type(card, "Pirate"):
-        _gain_gold(ctx, 1)
+        ctx.system.add_gold(ctx.source_player_id, 1)
+
+
+def _cenarius_wisdom_of_ancients(ctx):
+    if not _same_player(ctx):
+        return
+    ctx.system.increase_max_gold(ctx.source_player_id, 1)
 
 
 def _flurgl_gone_fishing(ctx):
@@ -164,11 +165,23 @@ def _dinotamer_brann_battle_brand(ctx):
 def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     """Register the currently audited Hero Power subset exactly once."""
 
+    effects = game.effects
+    install_economy_primitives(effects)
+
     hero_powers = HeroPowerSystem.for_game(game)
     if getattr(hero_powers, "_audited_content_registered", False):
         return hero_powers
 
-    effects = game.effects
+    # Trade Prince Gallywix — Smart Savings
+    # Triggered/passive economy: each sale banks +1 Gold for next turn.
+    hero_powers.register_passive(GALLYWIX_SMART_SAVINGS)
+    effects.register_effect(
+        GALLYWIX_SMART_SAVINGS,
+        GameEvent.CARD_SOLD,
+        _gallywix_smart_savings,
+        zones=(EffectZone.HERO_POWER,),
+        name="Trade Prince Gallywix — Smart Savings",
+    )
 
     # George the Fallen — Boon of Light
     # 1 Gold. Give a minion Divine Shield. Normal active powers are once/turn.
@@ -194,7 +207,7 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     )
 
     # Forest Warden Omu — Everbloom
-    # Passive: after upgrading the Tavern, gain 2 Gold.
+    # Passive: after upgrading the Tavern, gain 2 Gold immediately.
     hero_powers.register_passive(OMU_EVERBLOOM)
     effects.register_effect(
         OMU_EVERBLOOM,
@@ -205,7 +218,7 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     )
 
     # Cap'n Hoggarr — I'm the Cap'n Now
-    # Passive: after buying a Pirate, gain 1 Gold.
+    # Passive: after buying a Pirate, gain 1 Gold immediately.
     hero_powers.register_passive(HOGGARR_IM_THE_CAPN_NOW)
     effects.register_effect(
         HOGGARR_IM_THE_CAPN_NOW,
@@ -213,6 +226,17 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
         _hoggarr_im_the_capn_now,
         zones=(EffectZone.HERO_POWER,),
         name="Cap'n Hoggarr — I'm the Cap'n Now",
+    )
+
+    # Forest Lord Cenarius — Wisdom of Ancients
+    # 3 Gold. Increase maximum Gold by 1. Standard active use limit: once/turn.
+    hero_powers.register_active(CENARIUS_WISDOM_OF_ANCIENTS)
+    effects.register_effect(
+        CENARIUS_WISDOM_OF_ANCIENTS,
+        GameEvent.HERO_POWER_USED,
+        _cenarius_wisdom_of_ancients,
+        zones=(EffectZone.HERO_POWER,),
+        name="Forest Lord Cenarius — Wisdom of Ancients",
     )
 
     # Fungalmancer Flurgl — Gone Fishing
