@@ -1,6 +1,6 @@
 """Current Battlegrounds content that exercises the economy primitives.
 
-This module is intentionally small and rules-focused.  It upgrades the legacy
+This module is intentionally small and rules-focused. It upgrades the legacy
 Gold handlers to the post-24.2 economy semantics and implements current content
 whose primary mechanic is Gold/max-Gold state.
 """
@@ -12,8 +12,9 @@ from .effects import EffectZone, TriggerFamily
 from .events import GameEvent
 
 
-TAVERN_COIN = 104436
+CAREFUL_INVESTMENT = 103779
 STRIKE_OIL = 104029
+TAVERN_COIN = 104436
 OVERCONFIDENCE = 105267
 
 
@@ -29,6 +30,10 @@ def _remove_named(effects, card_id: int, *names: str) -> None:
 
 def _tavern_coin(ctx):
     ctx.system.add_gold(ctx.source_player_id, 1)
+
+
+def _careful_investment(ctx):
+    ctx.system.queue_gold_next_turn(ctx.source_player_id, 2)
 
 
 def _strike_oil(ctx):
@@ -92,6 +97,15 @@ def register_economy_effects(game) -> None:
         zones=(EffectZone.EVENT_SOURCE,),
         family=TriggerFamily.SPELL,
         name="Tavern Coin",
+    )
+
+    effects.register_effect(
+        CAREFUL_INVESTMENT,
+        GameEvent.SPELL_CAST,
+        _careful_investment,
+        zones=(EffectZone.EVENT_SOURCE,),
+        family=TriggerFamily.SPELL,
+        name="Careful Investment",
     )
 
     effects.register_effect(
