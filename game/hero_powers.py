@@ -73,13 +73,27 @@ class HeroPowerSystem:
 
     @classmethod
     def for_game(cls, game):
-        """Return/create the one HeroPowerSystem attached to a game."""
+        """Return/create the one HeroPowerSystem attached to a game.
+
+        The small audited current-content registry is attached here as well as
+        from normal Recruitment startup. This matters for MCTS/public-template
+        Bobs, which intentionally reconstruct a recruit state without calling
+        ``initialize_game()`` or ``Recruitment.start()`` for the current turn.
+        """
 
         current = getattr(game, cls.ATTRIBUTE_NAME, None)
         if isinstance(current, cls):
             return current
+
         system = cls(game)
         setattr(game, cls.ATTRIBUTE_NAME, system)
+
+        # Local import avoids a module-import cycle. The registry immediately
+        # calls for_game() again, which now returns the attached system and then
+        # performs one idempotent content registration pass.
+        from .hero_power_effects import register_audited_hero_power_effects
+
+        register_audited_hero_power_effects(game)
         return system
 
     def _bind_events(self):
