@@ -218,8 +218,19 @@ class ActionSpace:
         if tavern is not None and hand_has_space:
             spell = getattr(tavern, "spell", None)
             if isinstance(spell, dict):
-                spell_cost = int(spell.get("manaCost", 0) or 0)
-                if gold >= spell_cost:
+                can_buy_spell = False
+                if effects is not None and callable(
+                    getattr(effects, "can_pay_tavern_spell", None)
+                ):
+                    can_buy_spell = effects.can_pay_tavern_spell(
+                        player.player_id,
+                        spell,
+                    )
+                else:
+                    spell_cost = int(spell.get("manaCost", 0) or 0)
+                    can_buy_spell = gold >= spell_cost
+
+                if can_buy_spell:
                     self.add_action(Action(ActionType.BUY_SPELL))
 
         # -----------------------------------------------------
