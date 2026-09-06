@@ -1,15 +1,15 @@
 """Battlegrounds Gold/economy primitives.
 
-This module keeps four different mechanics distinct:
+This module keeps distinct mechanics distinct:
 
-- normal start-of-turn Gold progression (3, 4, ... up to a player's max Gold),
-- immediate Gold gains during recruitment (which may exceed max Gold),
-- permanent increases to a player's max Gold,
-- deferred Gold gains/losses that resolve at the start of a later recruit turn.
+- normal start-of-turn Gold progression,
+- immediate Gold gains during recruitment,
+- permanent increases to a player's maximum Gold,
+- deferred Gold gains/losses that resolve next turn,
+- alternate purchase resources such as Hasty Excavation costing Health.
 
-The separation matters because Battlegrounds has allowed shop-phase Gold gains
-to exceed 10 since Patch 24.2, while the normal start-of-turn amount is still
-bounded by the player's current maximum Gold.
+The separation matters because current Gold can exceed the player's normal
+start-of-turn maximum, while max Gold changes future turn-start resources.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from .events import GameEvent
 STARTING_GOLD = 3
 DEFAULT_MAX_GOLD = 10
 GOLD_INCREASE_PER_TURN = 1
+HASTY_EXCAVATION = 104559
 
 # Run before the legacy card_effects pending-Gold listener (-500) so old
 # content that already writes ``pending_gold_next_turn`` is upgraded to the
@@ -39,12 +40,7 @@ def normal_turn_gold(round_number: int, max_gold: int = DEFAULT_MAX_GOLD) -> int
 
 
 def gain_gold(player, amount: int) -> int:
-    """Gain Gold immediately.
-
-    Immediate shop-phase Gold gains are deliberately *not* capped by max_gold.
-    ``max_gold`` only limits the normal amount established at the start of a
-    recruit turn.
-    """
+    """Gain Gold immediately without applying the turn-start maximum."""
 
     amount = max(0, int(amount or 0))
     player.gold = int(getattr(player, "gold", 0) or 0) + amount
@@ -65,7 +61,7 @@ def increase_max_gold(player, amount: int) -> int:
     """Permanently increase the player's start-of-turn maximum Gold."""
 
     amount = max(0, int(amount or 0))
-    current = int(getattr(player, "max_gold", DEFAULT_MAX_GOLD) or DEFAULT_MAX_GOLD)
+    current = int(getattr(player, "max_gold", DEFAULT_MAX_GOLD))
     player.max_gold = current + amount
     return player.max_gold
 
@@ -90,6 +86,62 @@ def queue_gold_loss_next_turn(effects, player_id: int, amount: int) -> int:
         state.get("pending_gold_loss_next_turn", 0) or 0
     ) + amount
     return state["pending_gold_loss_next_turn"]
+
+
+def tavern_spell_purchase_resource(spell) -> str:
+    """Return the resource used to buy one Tavern spell."""
+
+    if isinstance(spell, dict) and spell.get("id") == HASTY_EXCAVATION:
+        return "health"
+    return "gold"
+
+
+def can_pay_tavern_spell(player, spell) -> bool:
+    """Return whether ``player`` can pay the printed Tavern-spell cost."""
+
+    if not isinstance(spell, dict):
+        return False
+    cost = max(0, int(spell.get("manaCost", 0) or 0))
+    if tavern_spell_purchase_resource(spell) == "health":
+        # Health-paid shop purchases cannot reduce the hero to 0.
+        return int(getattr(player, "health", 0) or 0) > cost
+    return int(getattr(player, "gold", 0) or 0) >= cost
+
+
+def pay_tavern_spell_cost(effects, player_id, spell):
+    """Pay one Tavern spell's purchase cost and return ``(resource, amount)``."""
+
+    player = effects.game.get_player(player_id)
+    cost = max(0, int(spell.get("manaCost", 0) or 0))
+    resource = tavern_spell_purchase_resource(spell)
+
+    if resource == "gold":
+        effects.spend_gold(
+            player_id,
+            cost,
+            reason="buy_spell",
+            source=spell,
+        )
+        return resource, cost
+
+    if int(getattr(player, "health", 0) or 0) <= cost:
+        raise ValueError("Not enough Health to buy this Tavern spell.")
+
+    # A Health cost is hero damage for current Battlegrounds interactions such
+    # as Soul Rewinder. It bypasses Armor because the card explicitly costs
+    # Health rather than dealing generic damage.
+    player.health = int(player.health) - cost
+    effects.events.emit(
+        GameEvent.PLAYER_DAMAGED,
+        player_id=player_id,
+        amount=cost,
+        armor_damage=0,
+        health_damage=cost,
+        self_damage=True,
+        purchase_health_cost=True,
+        source_card=spell,
+    )
+    return resource, cost
 
 
 def _resolve_deferred_gold(effects, event) -> None:
@@ -124,14 +176,16 @@ def _effect_queue_gold_loss_next_turn(self, player_id, amount):
     return queue_gold_loss_next_turn(self, player_id, amount)
 
 
-def install_economy_primitives(effects) -> None:
-    """Install the canonical economy API on one EffectSystem instance.
+def _effect_can_pay_tavern_spell(self, player_id, spell):
+    return can_pay_tavern_spell(self.game.get_player(player_id), spell)
 
-    EffectSystem already exposed ``add_gold``/``add_max_gold`` compatibility
-    methods before the economy model was separated.  Rebinding those instance
-    methods here lets existing card handlers use the corrected semantics while
-    new content can use the clearer queue/max-Gold methods directly.
-    """
+
+def _effect_pay_tavern_spell_cost(self, player_id, spell):
+    return pay_tavern_spell_cost(self, player_id, spell)
+
+
+def install_economy_primitives(effects) -> None:
+    """Install the canonical economy API on one EffectSystem instance."""
 
     if getattr(effects, "_economy_primitives_installed", False):
         return
@@ -144,6 +198,8 @@ def install_economy_primitives(effects) -> None:
         _effect_queue_gold_loss_next_turn,
         effects,
     )
+    effects.can_pay_tavern_spell = MethodType(_effect_can_pay_tavern_spell, effects)
+    effects.pay_tavern_spell_cost = MethodType(_effect_pay_tavern_spell_cost, effects)
 
     effects.events.register(
         GameEvent.TURN_START,
@@ -151,3 +207,53 @@ def install_economy_primitives(effects) -> None:
         order=DEFERRED_GOLD_TURN_START_ORDER,
     )
     effects._economy_primitives_installed = True
+
+
+def _guarded_buy_spell(self, player_id):
+    """Bob.buy_spell wrapper supporting Health-paid Tavern spells."""
+
+    player = self.get_player(player_id)
+    tavern = player.tavern
+    spell = getattr(tavern, "spell", None)
+
+    if not isinstance(spell, dict):
+        raise ValueError("No Tavern spell is available.")
+    if spell.get("cardType") != "spell":
+        raise ValueError("Tavern spell slot does not contain a spell.")
+    if len(player.hand) >= player.MAX_HAND_SIZE:
+        raise ValueError("Hand is full.")
+
+    # Ordinary Gold-paid spells continue through Bob's canonical implementation.
+    if tavern_spell_purchase_resource(spell) == "gold":
+        return type(self).buy_spell(self, player_id)
+
+    if not can_pay_tavern_spell(player, spell):
+        raise ValueError("Not enough Health to buy this Tavern spell.")
+
+    player.hand.append(spell)
+    tavern.spell = None
+    resource, cost = self.effects.pay_tavern_spell_cost(player_id, spell)
+
+    self.events.emit(
+        GameEvent.SPELL_BOUGHT,
+        source=self,
+        player=player,
+        player_id=player_id,
+        spell=spell,
+        card=spell,
+        gold_cost=0,
+        health_cost=cost,
+        purchase_resource=resource,
+    )
+
+
+def install_tavern_spell_purchase_guard(game) -> None:
+    """Install alternate-resource Tavern-spell buying on one Bob-like game."""
+
+    if getattr(game, "_economy_buy_spell_guard_installed", False):
+        return
+    if not callable(getattr(game, "buy_spell", None)):
+        return
+
+    game.buy_spell = MethodType(_guarded_buy_spell, game)
+    game._economy_buy_spell_guard_installed = True
