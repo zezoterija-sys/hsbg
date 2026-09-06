@@ -39,7 +39,20 @@ def test_recruit_death_gets_placement_and_becomes_available_as_ghost():
 def test_purchase_reserves_hand_space_before_gold_spent_effect(gold):
     bob = game()
     player = bob.get_player(0)
-    player.hand = [bob.effects.create_card(120031) for _ in range(9)]
+    # Use nine distinct synthetic minions so this hand-capacity regression does
+    # not accidentally exercise the independent three-copy TripleSystem.
+    player.hand = [
+        {
+            'id': -1000 - index,
+            'name': f'Synthetic Hand Minion {index}',
+            'cardType': 'minion',
+            'attack': 1,
+            'health': 1,
+            'tier': 1,
+            'keywords': [],
+        }
+        for index in range(9)
+    ]
     player.gold = gold
     bought = player.tavern.slots[0]
     bob.events.register(GameEvent.GOLD_SPENT,
