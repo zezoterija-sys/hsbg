@@ -31,6 +31,20 @@ def _same_player(ctx):
     return ctx.event.get("player_id") == ctx.source_player_id
 
 
+def _gain_gold(ctx, amount):
+    """Gain shop-phase Gold without applying the 10-Gold start-turn ceiling.
+
+    Battlegrounds has allowed earned Gold to exceed 10 since Patch 24.2. The
+    player's ``max_gold`` value is the normal start-of-turn economy ceiling, not
+    a cap on Gold gained during recruitment.
+    """
+
+    player = ctx.game.get_player(ctx.source_player_id)
+    amount = max(0, int(amount or 0))
+    player.gold = int(getattr(player, "gold", 0) or 0) + amount
+    return amount
+
+
 def _friendly_board_targets(context):
     player = context.game.get_player(context.player_id)
     return [
@@ -82,7 +96,7 @@ def _nozdormu_clairvoyance(ctx):
 def _omu_everbloom(ctx):
     if not _same_player(ctx):
         return
-    ctx.system.add_gold(ctx.source_player_id, 2)
+    _gain_gold(ctx, 2)
 
 
 def _hoggarr_im_the_capn_now(ctx):
@@ -90,7 +104,7 @@ def _hoggarr_im_the_capn_now(ctx):
         return
     card = ctx.event.get("card") or ctx.event.get("minion")
     if isinstance(card, dict) and ctx.system.is_minion_type(card, "Pirate"):
-        ctx.system.add_gold(ctx.source_player_id, 1)
+        _gain_gold(ctx, 1)
 
 
 def _flurgl_gone_fishing(ctx):
