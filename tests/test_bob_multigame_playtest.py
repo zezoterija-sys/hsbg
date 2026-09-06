@@ -75,9 +75,10 @@ def validate_player(player, *, game_index: int, round_number: int) -> None:
     if player.gold < 0:
         fail(f"{prefix}: negative Gold: {player.gold}")
 
-    max_gold = int(getattr(player, "max_gold", 10) or 10)
-    if player.gold > max_gold:
-        fail(f"{prefix}: Gold {player.gold} exceeds max_gold {max_gold}")
+    # Current recruit Gold may legitimately exceed max_gold through effects.
+    # max_gold is the normal start-of-turn ceiling, not a hard current-Gold cap.
+    if int(getattr(player, "max_gold", 10) or 10) < 0:
+        fail(f"{prefix}: negative max_gold: {player.max_gold}")
 
     if player.ap < 0:
         fail(f"{prefix}: negative AP: {player.ap}")
