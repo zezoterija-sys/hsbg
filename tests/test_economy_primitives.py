@@ -13,8 +13,9 @@ from game.hero_power_effects import register_audited_hero_power_effects
 
 CARDS_FILE = Path(__file__).resolve().parents[1] / "data" / "raw" / "cards.json"
 
-TAVERN_COIN = 104436
+CAREFUL_INVESTMENT = 103779
 STRIKE_OIL = 104029
+TAVERN_COIN = 104436
 OVERCONFIDENCE = 105267
 PRIVATE_INVESTIGATOR = 132318
 GALLYWIX = 57891
@@ -66,6 +67,26 @@ def test_tavern_coin_gains_gold_without_changing_max_gold():
     _cast_generated_spell(game, 0, TAVERN_COIN)
 
     assert player.gold == 11
+    assert player.max_gold == 10
+
+
+def test_careful_investment_queues_two_gold_for_next_turn_only():
+    game = _game(round_number=8)
+    player = game.get_player(0)
+    player.gold = 7
+    player.max_gold = 10
+
+    _cast_generated_spell(game, 0, CAREFUL_INVESTMENT)
+
+    state = game.effects.get_player_state(0)
+    assert player.gold == 7
+    assert player.max_gold == 10
+    assert state["pending_gold_next_turn"] == 2
+
+    # A normal new-turn reset happens before the queued gain resolves.
+    player.set_gold(10)
+    game.events.emit(GameEvent.TURN_START, player_id=0, round_number=9)
+    assert player.gold == 12
     assert player.max_gold == 10
 
 
