@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from .effects import EffectZone, TargetContext
+from .hero_powers import HeroPowerSystem
 
 
 class ActionType(Enum):
@@ -334,8 +335,12 @@ class ActionSpace:
         # -----------------------------------------------------
         # HERO POWER
         # -----------------------------------------------------
-        hero_power_cost = getattr(player, "hero_power_cost", 0)
-        if gold >= hero_power_cost:
+        # Printed hero-power data is not enough to make a legal action. The
+        # power must have an explicit runtime lifecycle rule and currently pass
+        # its unlock/cost/use-limit conditions. Passive/automatic and data-only
+        # powers therefore never appear as clickable no-op actions.
+        hero_powers = HeroPowerSystem.for_game(game_state)
+        if hero_powers.can_use(player.player_id):
             power = self._hero_power(player)
             if (
                 effects is not None
