@@ -17,6 +17,7 @@ from .lobby import roll_active_minion_types
 from .player import Player
 from .pool import CardPool
 from .recruitment import Recruitment
+from .triples import TripleSystem
 from .rulesets.patch_36_4_2_effects import register_36_4_2_effect_overrides
 
 
@@ -68,6 +69,8 @@ class Bob:
             active_minion_types=self.active_minion_types,
         )
         self.hero_pool = self._solos_hero_ids()
+
+        self.triples = TripleSystem(self)
 
         # Season 14 global Dark Discovery lifecycle. Individual Gift behavior
         # remains ordinary attachment-driven EffectSystem logic.

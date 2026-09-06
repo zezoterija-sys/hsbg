@@ -840,6 +840,9 @@ class DeterminizedBattlegroundsEnvironment:
             # They are not part of the root hand/shop counts removed above.
             for offer in choice.options:
                 self.belief.consume_visible_card(game.pool, offer.minion)
+        elif choice.resolver_key == game.triples.RESOLVER_KEY:
+            for offer in choice.options:
+                self.belief.consume_visible_card(game.pool, offer)
 
     # ==================================================================
     # HIDDEN OPPONENT SAMPLING

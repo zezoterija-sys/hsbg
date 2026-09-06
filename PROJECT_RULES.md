@@ -15,6 +15,10 @@ are deliberately changed.
 
 ## Work order
 
+- Current authorized implementation scope: ordinary triples and Triple Rewards.
+  Hero powers, Trinkets and Dark Gifts are on hold until the user resumes them.
+- Run focused checks for changes; leave full suites, multi-game simulations,
+  benchmarks and training runs to the user.
 - Complete and validate current Solos game rules and active mechanics first.
 - Maintain a basic AI interface/skeleton that can observe legal public/own
   state and play the game correctly while that work proceeds.

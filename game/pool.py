@@ -283,6 +283,13 @@ class CardPool:
     def return_card(self, card):
         """Return a fresh normalized copy of one pool card."""
 
+        if card.get("_triple_component_ids"):
+            for card_id in card["_triple_component_ids"]:
+                definition = self.card_definitions_by_id.get(card_id)
+                if definition is not None and self.is_pool_card(definition):
+                    self.available_cards.append(deepcopy(definition))
+            return
+
         if not self.is_pool_card(card):
             raise ValueError(
                 f"Card cannot be returned to the pool: "

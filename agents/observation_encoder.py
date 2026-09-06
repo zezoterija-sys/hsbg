@@ -129,7 +129,7 @@ class EncodedObservation:
 class ObservationEncoder:
     """Convert AgentObservation into stable model tensors."""
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     # Fixed schema order, independent of future engine lobby rules.
     LOBBY_MINION_TYPES = (
@@ -204,6 +204,8 @@ class ObservationEncoder:
         "own_visible_count",
         "remembered_pool_pressure",
         "memory_age",
+        "discover_tier",
+        "golden_reward_suppressed",
     ) + _prefixed("zone_", CARD_ZONES) + (
         "position",
         "owner_player_id",
@@ -627,6 +629,8 @@ class ObservationEncoder:
                 self._bounded_scale(own_visible_count, 6.0),
                 min(1.0, max(0.0, pressure)),
                 self._bounded_scale(memory_age, 20.0),
+                self._bounded_scale(self._number(card.get("_discover_tier")), 6.0),
+                float(bool(card.get("_no_triple_reward") or card.get("_dark_gift_no_triple_reward"))),
                 *zone_one_hot,
                 self._bounded_scale(position, max(1.0, float(capacity - 1))),
                 self._bounded_scale(owner_player_id or 0, 7.0),
