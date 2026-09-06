@@ -893,7 +893,24 @@ class Combat:
             player.set_placement(first_place + offset)
         return ordered
 
+    def finalize_recruit_eliminations(self):
+        """Place seats killed by recruit effects before combat pairing."""
+        pending = [p for p in self.bob.players if p.eliminated and p.placement is None]
+        if not pending:
+            return
+        ordered = self._assign_elimination_placements(
+            len(self._alive_players()) + len(pending), pending,
+        )
+        self.last_eliminated_player_id = ordered[0].player_id
+        for player in ordered:
+            self.events.emit(
+                GameEvent.PLAYER_ELIMINATED,
+                player_id=player.player_id,
+                placement=player.placement,
+            )
+
     def run_round(self):
+        self.finalize_recruit_eliminations()
         alive = self._alive_players()
         if len(alive) <= 1:
             winner_id = alive[0].player_id if alive else None

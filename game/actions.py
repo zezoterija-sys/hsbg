@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from .effects import EffectZone, TargetContext
+from .hero_powers import HeroPowerSystem
 
 
 class ActionType(Enum):
@@ -16,6 +17,7 @@ class ActionType(Enum):
     CAST_SPELL = "cast_spell"
     HERO_POWER = "hero_power"
     ACTIVATE = "activate"
+    DARK_GIFT = "dark_gift"
     FREEZE = "freeze"
     UNFREEZE = "unfreeze"
     UPGRADE_TAVERN = "upgrade_tavern"
@@ -45,12 +47,18 @@ class Action:
     effect_target_idx: Optional[int] = None
 
     @property
-    def ap_cost(self) -> int:
-        # Choice resolution is part of the action that opened the choice; it
-        # must remain resolvable even if that action spent the player's last AP.
+    def interaction_cost(self) -> int:
+        """Artificial recruit-scheduler cost, not a Hearthstone resource."""
+
         if self.action_type in (ActionType.END_TURN, ActionType.CHOOSE_OPTION):
             return 0
         return 1
+
+    @property
+    def ap_cost(self) -> int:
+        """Backward-compatible alias for old traces/tests."""
+
+        return self.interaction_cost
 
     def __repr__(self) -> str:
         parts = [self.action_type.value]
@@ -117,29 +125,37 @@ class ActionSpace:
             return hero.get("power")
         return None
 
+    @staticmethod
+    def _recruit_scheduler(game_state):
+        scheduler = getattr(game_state, "scheduler", None)
+        if scheduler is not None:
+            return scheduler
+        recruitment = getattr(game_state, "recruitment", None)
+        return getattr(recruitment, "scheduler", None)
+
     def generate_for_player(self, player: Any, game_state: Any):
         self.reset()
 
         if getattr(game_state, "phase", None) != "recruit":
             return
 
-        effects = getattr(
-            game_state,
-            "effects",
-            None,
-        )
+        effects = getattr(game_state, "effects", None)
 
-        # Mandatory choices must remain resolvable even when the
-        # action that opened them spent the player's final AP.
+        # Normal Recruitment installs current economy content before TURN_START.
+        # MCTS/public-template Bobs can be reconstructed directly into recruit
+        # without calling Recruitment.start(), so make the same idempotent rules
+        # available before legal Tavern-spell purchases are generated there.
+        if effects is not None and callable(getattr(game_state, "buy_spell", None)):
+            from .economy_effects import register_economy_effects
+
+            register_economy_effects(game_state)
+
+        # Mandatory choices remain resolvable after the scheduler budget reaches
+        # zero because they are continuations of interactions already paid for.
         if effects is not None:
-            pending = effects.get_pending_choice(
-                player.player_id
-            )
-
+            pending = effects.get_pending_choice(player.player_id)
             if pending is not None:
-                for option_idx in range(
-                    len(pending.options)
-                ):
+                for option_idx in range(len(pending.options)):
                     self.add_action(
                         Action(
                             ActionType.CHOOSE_OPTION,
@@ -148,19 +164,40 @@ class ActionSpace:
                     )
                 return
 
-        if getattr(player, "waiting", False):
-            return
+        scheduler = self._recruit_scheduler(game_state)
+        if scheduler is not None and scheduler.has_player(player.player_id):
+            recruitment = getattr(game_state, "recruitment", None)
+            if recruitment is not None:
+                eligible = set(recruitment.eligible_player_ids())
+                if player.player_id not in eligible:
+                    return
+
+            if scheduler.is_finished(player.player_id):
+                return
+            interaction_budget = scheduler.remaining_budget(player.player_id)
+        else:
+            # Compatibility path for isolated legacy unit tests that construct a
+            # Player without a live Recruitment/RecruitScheduler.
+            if getattr(player, "waiting", False):
+                return
+            interaction_budget = getattr(player, "ap", 0)
 
         self.add_action(Action(ActionType.END_TURN))
 
-        ap = getattr(player, "ap", 0)
-        if ap <= 0:
+        if interaction_budget <= 0:
             return
 
         gold = getattr(player, "gold", 0)
         hand = getattr(player, "hand", [])
         board = getattr(player, "board", [])
         tavern = getattr(player, "tavern", None)
+
+        # -----------------------------------------------------
+        # DARK DISCOVERY / DARK GIFT
+        # -----------------------------------------------------
+        dark_gifts = getattr(game_state, "dark_gifts", None)
+        if dark_gifts is not None and dark_gifts.can_use(player.player_id):
+            self.add_action(Action(ActionType.DARK_GIFT))
 
         # -----------------------------------------------------
         # REFRESH
@@ -190,8 +227,19 @@ class ActionSpace:
         if tavern is not None and hand_has_space:
             spell = getattr(tavern, "spell", None)
             if isinstance(spell, dict):
-                spell_cost = int(spell.get("manaCost", 0) or 0)
-                if gold >= spell_cost:
+                can_buy_spell = False
+                if effects is not None and callable(
+                    getattr(effects, "can_pay_tavern_spell", None)
+                ):
+                    can_buy_spell = effects.can_pay_tavern_spell(
+                        player.player_id,
+                        spell,
+                    )
+                else:
+                    spell_cost = int(spell.get("manaCost", 0) or 0)
+                    can_buy_spell = gold >= spell_cost
+
+                if can_buy_spell:
                     self.add_action(Action(ActionType.BUY_SPELL))
 
         # -----------------------------------------------------
@@ -210,8 +258,6 @@ class ActionSpace:
             if not isinstance(card, dict) or card.get("cardType") != "minion":
                 continue
 
-            # Normal play into an empty slot. Targeted Battlecries encode
-            # their effect target separately from the board destination.
             if effects is not None and effects.has_target_rule(card.get("id")):
                 context = TargetContext(
                     game=game_state,
@@ -241,8 +287,6 @@ class ActionSpace:
                         )
                     )
 
-            # Magnetic may be played directly onto an occupied Mech even when
-            # the board is full.
             if effects is not None and effects.is_magnetic(card):
                 for board_idx, target in enumerate(board):
                     if effects.can_magnetize(card, target):
@@ -311,8 +355,12 @@ class ActionSpace:
         # -----------------------------------------------------
         # HERO POWER
         # -----------------------------------------------------
-        hero_power_cost = getattr(player, "hero_power_cost", 0)
-        if gold >= hero_power_cost:
+        # Printed hero-power data is not enough to make a legal action. The
+        # power must have an explicit runtime lifecycle rule and currently pass
+        # its unlock/cost/use-limit conditions. Passive/automatic and data-only
+        # powers therefore never appear as clickable no-op actions.
+        hero_powers = HeroPowerSystem.for_game(game_state)
+        if hero_powers.can_use(player.player_id):
             power = self._hero_power(player)
             if (
                 effects is not None

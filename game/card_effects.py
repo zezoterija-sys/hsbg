@@ -156,7 +156,7 @@ def _normal_tavern_minion_definitions(system, *, tier=None, minion_type=None):
             continue
         if "tavern" not in card.get("categories", []):
             continue
-        if card.get("isDuosOnly", False) or card.get("isSolosOnly", False):
+        if card.get("isDuosOnly", False):
             continue
         if tier is not None and card.get("tier") != tier:
             continue
@@ -175,7 +175,7 @@ def _tavern_spell_definitions(system):
             continue
         if "tavern" not in card.get("categories", []):
             continue
-        if card.get("isDuosOnly", False) or card.get("isSolosOnly", False):
+        if card.get("isDuosOnly", False):
             continue
         result.append(card)
     return result
@@ -232,7 +232,7 @@ def _apply_blood_gems(ctx, target, count=1):
 
 def _emit_recruit_player_damage(ctx, amount):
     player = ctx.get_player()
-    if player is None or amount <= 0:
+    if player is None or amount <= 0 or getattr(player, "eliminated", False):
         return
 
     if hasattr(player, "take_damage"):

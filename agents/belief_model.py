@@ -110,6 +110,9 @@ class PoolBeliefModel:
         if not isinstance(card, dict):
             return 0
 
+        if "_pool_copies" in card:
+            return sum(self._remove_one_by_id(pool, card_id) for card_id in card["_pool_copies"])
+
         if card.get("_generated", False):
             return 0
 

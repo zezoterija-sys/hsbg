@@ -111,6 +111,7 @@ class OwnPlayerView:
     effect_state: Mapping[str, Any]
     max_gold: int = 10
     hero_power_cost: int = 0
+    hero_power_state: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -177,6 +178,8 @@ class AgentObservation:
 
     recent_tavern_upgrades: tuple[TavernUpgradeMemory, ...]
     pending_choice: ChoiceView | None = None
+    # Public lobby rules; never inferred from hidden pool contents.
+    active_minion_types: tuple[str, ...] = ()
 
     def opponent(self, player_id: int) -> PublicOpponentView:
         for opponent in self.opponents:
@@ -413,6 +416,7 @@ class ObservationBuilder:
                 round_number
             ),
             pending_choice=self._build_pending_choice(game, player_id),
+            active_minion_types=tuple(sorted(getattr(game, "active_minion_types", ()))),
         )
 
     def _build_self_view(self, game: Any, player: Any) -> OwnPlayerView:
@@ -461,6 +465,10 @@ class ObservationBuilder:
             max_gold=int(getattr(player, "max_gold", 10) or 10),
             hero_power_cost=int(
                 getattr(player, "hero_power_cost", 0) or 0
+            ),
+            hero_power_state=(
+                game.hero_powers.export_player_state(player.player_id)
+                if getattr(game, "hero_powers", None) is not None else {}
             ),
         )
 
@@ -587,10 +595,10 @@ class ObservationBuilder:
         if pending is None:
             return None
 
-        options = tuple(
-            deepcopy(option)
-            for option in getattr(pending, "options", ())
-        )
+        # Preserve aliases between visible choice options and reservation
+        # metadata while detaching the entire graph from the real game.
+        pending = deepcopy(pending)
+        options = tuple(getattr(pending, "options", ()))
 
         source = _copy_card(
             getattr(pending, "source_card", None)
@@ -621,7 +629,7 @@ class ObservationBuilder:
                 if isinstance(source_card_id, int)
                 else None
             ),
-            metadata=deepcopy(
+            metadata=dict(
                 getattr(
                     pending,
                     "metadata",

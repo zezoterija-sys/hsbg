@@ -1,8 +1,8 @@
 """
 Structured tensor encoding for AgentObservation.
 
-Schema v2 keeps categorical card/hero identity separate from numeric features,
-adds stable own-mechanic state, and preserves the AI information firewall.
+Schema v5 adds own Hero Power use counters to the scalar features.
+Card/hero identity and own-mechanic state preserve the AI information firewall.
 Only information already present in AgentObservation is encoded.
 """
 
@@ -129,7 +129,13 @@ class EncodedObservation:
 class ObservationEncoder:
     """Convert AgentObservation into stable model tensors."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 5
+
+    # Fixed schema order, independent of future engine lobby rules.
+    LOBBY_MINION_TYPES = (
+        "Beast", "Demon", "Dragon", "Elemental", "Mech", "Murloc",
+        "Naga", "Pirate", "Quilboar", "Undead",
+    )
 
     OWN_BOARD_SLOTS = 7
     OWN_HAND_SLOTS = 10
@@ -173,6 +179,22 @@ class ObservationEncoder:
         "opponent_board",
     )
 
+    # Visible enchantments change how a card plays even when ID/stats match.
+    # Keep this inventory fixed as part of schema v3.
+    DARK_GIFT_IDS = (
+        132192, 132200, 132201, 132202, 132203, 132205, 132207, 132208,
+        132276, 132279, 132441, 132442, 132443, 132445, 132448, 132485,
+        132553, 132554, 132555, 132732, 132733, 132734, 132790, 132833,
+        132835, 133310, 133344, 133351, 133353, 133359, 133361, 133363,
+        133421, 133423, 133424, 133457, 133472, 133474, 133476, 133478,
+        133480, 133482, 133860,
+    )
+    VISIBLE_KEYWORDS = (
+        "Taunt", "Divine Shield", "Reborn", "Venomous", "Poisonous",
+        "Windfury", "Stealth", "Immune", "Deathrattle", "Rally",
+        "Battlecry", "Magnetic", "Spellcraft", "Avenge",
+    )
+
     CARD_FEATURE_NAMES = (
         "attack",
         "health",
@@ -182,15 +204,22 @@ class ObservationEncoder:
         "own_visible_count",
         "remembered_pool_pressure",
         "memory_age",
+        "discover_tier",
+        "golden_reward_suppressed",
     ) + _prefixed("zone_", CARD_ZONES) + (
         "position",
         "owner_player_id",
+    ) + tuple(f"dark_gift_{card_id}" for card_id in DARK_GIFT_IDS) + tuple(
+        f"keyword_{keyword.lower().replace(' ', '_')}" for keyword in VISIBLE_KEYWORDS
     )
     CARD_FEATURE_SIZE = len(CARD_FEATURE_NAMES)
 
     # Fixed own-effect keys. Unknown/new engine keys are intentionally ignored
     # until this schema is deliberately versioned again.
     EFFECT_SCALAR_SPECS = (
+        ("dark_gift_uses", 3.0),
+        ("dark_gift_last_used_turn", 30.0),
+        ("dark_gift_fodder_refreshes", 20.0),
         ("free_refreshes", 10.0),
         ("health_refreshes_remaining", 10.0),
         ("gold_spent_turn", 20.0),
@@ -247,6 +276,7 @@ class ObservationEncoder:
         "round_number",
         "game_over",
         *(f"phase_{phase}" for phase in PHASES),
+        *(f"lobby_type_{tribe.lower()}" for tribe in LOBBY_MINION_TYPES),
     )
 
     SELF_SCALAR_NAMES = (
@@ -265,6 +295,9 @@ class ObservationEncoder:
         "self_hand_count",
         "self_tavern_minion_count",
         "self_has_tavern_spell",
+        "self_hero_power_uses_turn",
+        "self_hero_power_uses_game",
+        "self_hero_power_extra_uses_turn",
     )
 
     CHOICE_SCALAR_NAMES = (
@@ -452,6 +485,8 @@ class ObservationEncoder:
             1.0 if observation.phase == phase else 0.0
             for phase in self.PHASES
         )
+        active_types = set(observation.active_minion_types)
+        values.extend(float(tribe in active_types) for tribe in self.LOBBY_MINION_TYPES)
 
         player = observation.self_player
         values.extend([
@@ -470,6 +505,9 @@ class ObservationEncoder:
             self._bounded_scale(self._present_count(player.hand), 10.0),
             self._bounded_scale(self._present_count(player.tavern_slots), 6.0),
             float(isinstance(player.tavern_spell, dict)),
+            self._bounded_scale(player.hero_power_state.get("uses_turn", 0), 10.0),
+            self._bounded_scale(player.hero_power_state.get("uses_game", 0), 100.0),
+            self._bounded_scale(player.hero_power_state.get("extra_uses_turn", 0), 10.0),
         ])
 
         pending = observation.pending_choice
@@ -597,10 +635,16 @@ class ObservationEncoder:
                 self._bounded_scale(own_visible_count, 6.0),
                 min(1.0, max(0.0, pressure)),
                 self._bounded_scale(memory_age, 20.0),
+                self._bounded_scale(self._number(card.get("_discover_tier")), 6.0),
+                float(bool(card.get("_no_triple_reward") or card.get("_dark_gift_no_triple_reward"))),
                 *zone_one_hot,
                 self._bounded_scale(position, max(1.0, float(capacity - 1))),
                 self._bounded_scale(owner_player_id or 0, 7.0),
             ]
+            gifts = set(card.get("_dark_gift_ids", ()))
+            keywords = {str(value).casefold() for value in card.get("keywords", ())}
+            row.extend(float(gift_id in gifts) for gift_id in self.DARK_GIFT_IDS)
+            row.extend(float(keyword.casefold() in keywords) for keyword in self.VISIBLE_KEYWORDS)
             if len(row) != self.CARD_FEATURE_SIZE:
                 raise RuntimeError("ObservationEncoder card feature-size mismatch.")
             features.append(row)
