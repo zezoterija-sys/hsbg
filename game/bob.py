@@ -88,7 +88,7 @@ class Bob:
         # Direct Hero Power calls must be guarded even before action generation
         # or initialize_game(), including small fixtures and public templates.
         from .hero_powers import HeroPowerSystem
-        HeroPowerSystem.for_game(self)
+        HeroPowerSystem.for_game(self, register_content=False)
 
     # =========================================================
     # GAME INITIALIZATION

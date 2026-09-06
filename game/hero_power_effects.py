@@ -183,7 +183,9 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     effects = game.effects
     install_economy_primitives(effects)
 
-    hero_powers = HeroPowerSystem.for_game(game)
+    # Content registration is the caller of for_game(); avoid recursively
+    # re-entering the optional content-registration hook.
+    hero_powers = HeroPowerSystem.for_game(game, register_content=False)
     if getattr(hero_powers, "_audited_content_registered", False):
         return hero_powers
 

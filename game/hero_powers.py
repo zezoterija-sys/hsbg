@@ -73,7 +73,7 @@ class HeroPowerSystem:
         self._bind_events()
 
     @classmethod
-    def for_game(cls, game):
+    def for_game(cls, game, *, register_content=True):
         """Return/create the one HeroPowerSystem attached to a game.
 
         The small audited current-content registry is attached here as well as
@@ -91,6 +91,9 @@ class HeroPowerSystem:
             from .hero_power_guard import install_hero_power_use_guard
 
             install_hero_power_use_guard(game)
+            if register_content and not getattr(current, "_audited_content_registered", False):
+                from .hero_power_effects import register_audited_hero_power_effects
+                register_audited_hero_power_effects(game)
             return current
 
         system = cls(game)
@@ -103,7 +106,8 @@ class HeroPowerSystem:
         from .hero_power_guard import install_hero_power_use_guard
 
         install_hero_power_use_guard(game)
-        register_audited_hero_power_effects(game)
+        if register_content:
+            register_audited_hero_power_effects(game)
         return system
 
     def _bind_events(self):
