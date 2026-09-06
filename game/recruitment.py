@@ -13,6 +13,8 @@ Handles:
 Only living players participate in recruitment.
 """
 
+from .economy import DEFAULT_MAX_GOLD, normal_turn_gold
+from .economy_effects import register_economy_effects
 from .events import GameEvent
 from .hero_power_effects import register_audited_hero_power_effects
 from .scheduler import RecruitScheduler
@@ -22,7 +24,7 @@ class Recruitment:
     """Controls the recruit phase."""
 
     STARTING_GOLD = 3
-    MAX_GOLD = 10
+    MAX_GOLD = DEFAULT_MAX_GOLD
     GOLD_INCREASE_PER_ROUND = 1
 
     RECRUIT_INTERACTION_BUDGET = 100
@@ -57,9 +59,10 @@ class Recruitment:
         self.bob.round_number += 1
         self.bob.phase = "recruit"
 
-        # Hero Power content must exist before TURN_START is emitted. Registering
-        # it lazily from ActionSpace would miss automatic/passive first-turn
-        # triggers such as Nozdormu's free Refresh.
+        # Economy and Hero Power content must exist before TURN_START is emitted.
+        # This is where deferred Gold is paid and automatic powers such as
+        # Nozdormu trigger.
+        register_economy_effects(self.bob)
         register_audited_hero_power_effects(self.bob)
 
         self.generate_priority()
@@ -94,17 +97,23 @@ class Recruitment:
     def generate_priority(self):
         self.bob.generate_priority_order()
 
-    def calculate_gold(self):
-        return min(
-            self.STARTING_GOLD
-            + (self.bob.round_number - 1) * self.GOLD_INCREASE_PER_ROUND,
-            self.MAX_GOLD,
+    def calculate_gold(self, player=None):
+        """Return normal start-of-turn Gold for one player.
+
+        ``player=None`` preserves the old helper behavior for isolated tests,
+        using the default 10-Gold maximum.
+        """
+
+        max_gold = (
+            int(getattr(player, "max_gold", self.MAX_GOLD) or self.MAX_GOLD)
+            if player is not None
+            else self.MAX_GOLD
         )
+        return normal_turn_gold(self.bob.round_number, max_gold=max_gold)
 
     def prepare_players(self):
         """Reset recruit resources and private scheduling state."""
 
-        gold = self.calculate_gold()
         alive_players = self.get_alive_players()
 
         self.scheduler.begin_phase(
@@ -115,7 +124,9 @@ class Recruitment:
             player.bind_recruit_scheduler(self.scheduler)
 
         for player in alive_players:
-            player.reset_for_recruit_phase(gold=gold)
+            player.reset_for_recruit_phase(
+                gold=self.calculate_gold(player),
+            )
 
     def pending_choice_player_ids(self):
         """Return living seats with mandatory zero-cost continuations."""
