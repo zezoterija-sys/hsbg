@@ -8,6 +8,7 @@ This module intentionally keeps advanced content out of the generic EffectSystem
 """
 
 from copy import deepcopy
+from functools import partial
 import re
 
 from .effects import EffectZone, TriggerFamily
@@ -368,7 +369,7 @@ def _definitions(system, *, card_type="minion", tier=None, minion_type=None, pre
             continue
         if "tavern" not in (card.get("categories") or []):
             continue
-        if card.get("isDuosOnly", False) or card.get("isSolosOnly", False):
+        if card.get("isDuosOnly", False):
             continue
         if tier is not None and card.get("tier") != tier:
             continue
@@ -934,17 +935,17 @@ def _global_magnetized(effects, event):
 
 
 def _register_global_runtime(effects):
-    effects.events.register(GameEvent.TURN_START, lambda e: _global_turn_start(effects, e), order=-450)
-    effects.events.register(GameEvent.SPELL_CAST, lambda e: _global_spell_cast(effects, e), order=-450)
-    effects.events.register(GameEvent.CARD_PLAYED, lambda e: _global_card_played(effects, e), order=-450)
-    effects.events.register(GameEvent.TRIGGER_RESOLVED, lambda e: _global_trigger_resolved(effects, e), order=-450)
-    effects.events.register(GameEvent.CARD_ADDED_TO_HAND, lambda e: _global_card_entered(effects, e), order=500)
-    effects.events.register(GameEvent.CARD_BOUGHT, lambda e: _global_card_entered(effects, e), order=500)
-    effects.events.register(GameEvent.TAVERN_CARD_APPEARED, lambda e: _global_card_entered(effects, e), order=500)
-    effects.events.register(GameEvent.TAVERN_REFRESHED, lambda e: _global_tavern_refresh(effects, e), order=500)
-    effects.events.register(GameEvent.MINION_DIED, lambda e: _global_minion_died(effects, e), order=-450)
-    effects.events.register(GameEvent.MINION_SUMMONED, lambda e: _global_minion_summoned(effects, e), order=-450)
-    effects.events.register(GameEvent.MAGNETIZED, lambda e: _global_magnetized(effects, e), order=-450)
+    effects.events.register(GameEvent.TURN_START, partial(_global_turn_start, effects), order=-450)
+    effects.events.register(GameEvent.SPELL_CAST, partial(_global_spell_cast, effects), order=-450)
+    effects.events.register(GameEvent.CARD_PLAYED, partial(_global_card_played, effects), order=-450)
+    effects.events.register(GameEvent.TRIGGER_RESOLVED, partial(_global_trigger_resolved, effects), order=-450)
+    effects.events.register(GameEvent.CARD_ADDED_TO_HAND, partial(_global_card_entered, effects), order=500)
+    effects.events.register(GameEvent.CARD_BOUGHT, partial(_global_card_entered, effects), order=500)
+    effects.events.register(GameEvent.TAVERN_CARD_APPEARED, partial(_global_card_entered, effects), order=500)
+    effects.events.register(GameEvent.TAVERN_REFRESHED, partial(_global_tavern_refresh, effects), order=500)
+    effects.events.register(GameEvent.MINION_DIED, partial(_global_minion_died, effects), order=-450)
+    effects.events.register(GameEvent.MINION_SUMMONED, partial(_global_minion_summoned, effects), order=-450)
+    effects.events.register(GameEvent.MAGNETIZED, partial(_global_magnetized, effects), order=-450)
 
 # =============================================================
 # TIER 3
@@ -2791,6 +2792,8 @@ def _deal_hero_damage(system, player_id, amount, *, source=None):
     if amount <= 0:
         return
     player = system.game.get_player(player_id)
+    if getattr(player, "eliminated", False):
+        return
     if hasattr(player, "take_damage"):
         armor_damage, health_damage = player.take_damage(amount)
     else:

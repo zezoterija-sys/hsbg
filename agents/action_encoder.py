@@ -1,9 +1,9 @@
 """
 Stable feature encoding for variable Battlegrounds actions.
 
-Schema v2 adds observation-aware candidate semantics so the policy can learn
-which concrete card/choice an action refers to instead of learning only slot
-indices such as "option 0".
+Schema v3 adds the Season 14 Dark Discovery action and paired Dark Gift choice
+semantics while retaining the observation-aware candidate features introduced
+in schema v2.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class ActionEncoder:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     ACTION_TYPE_NAMES = (
         "refresh",
@@ -29,6 +29,7 @@ class ActionEncoder:
         "cast_spell",
         "hero_power",
         "activate",
+        "dark_gift",
         "freeze",
         "unfreeze",
         "upgrade_tavern",
@@ -54,8 +55,8 @@ class ActionEncoder:
     MAX_EFFECT_TARGET_INDEX = 9
 
     # Non-card Choose One options are often stable semantic strings such as
-    # "improve" or "gems". A deterministic hash bucket lets the model learn
-    # those meanings without growing an unbounded vocabulary.
+    # "improve" or "gems". Dark Gift choices use the same deterministic bucket
+    # for the Gift identity while the paired minion occupies the card-ID feature.
     CHOICE_TOKEN_BUCKETS = 32
 
     @classmethod
@@ -170,11 +171,25 @@ class ActionEncoder:
         if pending is None or option_idx is None or not 0 <= option_idx < len(pending.options):
             return None
         option = pending.options[option_idx]
+
+        # Season 14 DarkGiftOffer: card identity is encoded separately through
+        # ``candidate_card_id`` and the Gift name becomes the semantic token.
+        gift = getattr(option, "gift", None)
+        if isinstance(gift, dict):
+            gift_name = gift.get("name")
+            if isinstance(gift_name, str) and gift_name:
+                return f"dark_gift:{gift_name.casefold()}"
+
         if isinstance(option, str):
             return option.casefold()
         if isinstance(option, dict):
             if isinstance(option.get("id"), int):
                 return None  # card embedding carries the identity
+            nested_gift = option.get("gift")
+            if isinstance(nested_gift, dict):
+                gift_name = nested_gift.get("name")
+                if isinstance(gift_name, str) and gift_name:
+                    return f"dark_gift:{gift_name.casefold()}"
             for key in ("key", "name", "slug", "type"):
                 value = option.get(key)
                 if isinstance(value, str) and value:
@@ -192,9 +207,21 @@ class ActionEncoder:
             return None
         if isinstance(value, int):
             return value
+
+        # Season 14 DarkGiftOffer pairs one physical minion with one Gift.
+        minion = getattr(value, "minion", None)
+        if isinstance(minion, dict):
+            card_id = minion.get("id")
+            return card_id if isinstance(card_id, int) else None
+
         if isinstance(value, dict):
             card_id = value.get("id")
-            return card_id if isinstance(card_id, int) else None
+            if isinstance(card_id, int):
+                return card_id
+            nested_minion = value.get("minion")
+            if isinstance(nested_minion, dict):
+                card_id = nested_minion.get("id")
+                return card_id if isinstance(card_id, int) else None
         return None
 
     @classmethod

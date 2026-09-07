@@ -1,11 +1,11 @@
 """Validate heroes.py structure"""
 
-import json
+import sys
 from pathlib import Path
 
-# Load heroes.py by executing it
-heroes_file = Path("game/heroes.py")
-exec(open(heroes_file).read())
+# Validate the runtime catalog, including the pinned ruleset repairs.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from game.heroes import HEROES
 
 # Define required fields
 HERO_REQUIRED = {"name", "health", "armor", "power"}
@@ -26,8 +26,12 @@ for hero_id, hero_data in HEROES.items():
     if "power" in hero_data and hero_data["power"]:
         power = hero_data["power"]
         for field in POWER_REQUIRED:
-            if field not in power:
+            if field not in power or power[field] is None:
                 errors.append(f"Hero {hero_id} ({hero_name}) Power: Missing '{field}'")
+        if isinstance(power.get("id"), bool) or not isinstance(power.get("id"), int):
+            errors.append(
+                f"Hero {hero_id} ({hero_name}) Power: 'id' must be an integer"
+            )
     elif "power" not in hero_data or hero_data["power"] is None:
         errors.append(f"Hero {hero_id} ({hero_name}): NO POWER")
     
@@ -52,3 +56,4 @@ else:
     print("✅ All heroes have buddies!")
 
 print(f"\n📊 Total: {len(HEROES)} heroes checked")
+raise SystemExit(1 if errors else 0)

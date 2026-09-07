@@ -238,6 +238,7 @@ class EffectContext:
             until_next_turn=until_next_turn,
         )
 
+
     def grant_keyword(self, target, keyword, *, until_next_turn=False):
         return self.system.grant_keyword(
             target,
@@ -377,6 +378,50 @@ class EffectSystem:
             "add_card_to_hand",
             self._resolve_add_card_to_hand_choice,
         )
+        self.register_choice_resolver("physical_pool_discover", self._resolve_pool_discover)
+        self.events.register(GameEvent.PLAYER_ELIMINATED, self._release_pool_discover_on_elimination)
+
+    def discover_pool_minions(self, player_id, predicate, *, source_card_id=None, count=3):
+        """Reserve distinct minion identities using the Triple Reward pool model."""
+        if self.get_pending_choice(player_id) is not None:
+            raise ValueError("Resolve the current choice first.")
+        offers, seen = [], set()
+        for _ in range(count):
+            candidates = [card for card in self.game.pool.available_cards
+                          if card.get("cardType") == "minion" and card["id"] not in seen
+                          and predicate(card)]
+            if not candidates:
+                break
+            chosen = self.random.choice(candidates)
+            index = next(i for i, card in enumerate(self.game.pool.available_cards) if card is chosen)
+            offers.append(self.game.pool.available_cards.pop(index))
+            seen.add(chosen["id"])
+        if not offers:
+            return None
+        return self.start_choice(player_id, "physical_pool_discover", offers,
+                                 kind="discover", source_card_id=source_card_id,
+                                 metadata={"reserved_offers": offers})
+
+    def _resolve_pool_discover(self, system, player_id, option, metadata):
+        offers = metadata.pop("reserved_offers", [])
+        player = system.game.get_player(player_id)
+        for card in offers:
+            if card is not option:
+                system.game.pool.return_card(card)
+        if player.eliminated or len(player.hand) >= player.MAX_HAND_SIZE:
+            system.game.pool.return_card(option)
+            return
+        player.hand.append(option)
+        system.events.emit(GameEvent.CARD_ADDED_TO_HAND, player_id=player_id, card=option)
+
+    def _release_pool_discover_on_elimination(self, event):
+        player_id = event.get("player_id")
+        choice = self.get_pending_choice(player_id)
+        if choice is None or choice.resolver_key != "physical_pool_discover":
+            return
+        self._pending_choices.pop(player_id)
+        for card in choice.metadata.pop("reserved_offers", []):
+            self.game.pool.return_card(card)
 
     def _resolve_add_card_to_hand_choice(self, system, player_id, option, metadata):
         if isinstance(option, int):
@@ -515,6 +560,29 @@ class EffectSystem:
     # =========================================================
     # BUFFS / TEMPORARY MODIFIERS
     # =========================================================
+
+    def apply_permanent_combat_buff(self, side, target, *, attack=0, health=0):
+        """Buff a combat card and its living owner's mapped recruit original.
+
+        The target side, not the effect source owner, determines persistence.
+        Ghosts and combat-only summons never write to a recruit board.
+        """
+        if not any(card is target for card in side.board):
+            raise ValueError("Permanent combat target does not belong to side.")
+        self.apply_buff(target, attack=attack, health=health)
+        if getattr(side, "is_ghost", False):
+            return target
+        player = self.game.get_player(side.player_id)
+        if player.eliminated:
+            return target
+        index = target.get("_persistent_board_index")
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(player.board):
+            return target
+        original = player.board[index]
+        if (isinstance(original, dict) and original is not target
+                and original.get("id") == target.get("id")):
+            self.apply_buff(original, attack=attack, health=health)
+        return target
 
     def apply_buff(self, target, *, attack=0, health=0, until_next_turn=False):
         if not isinstance(target, dict):
@@ -990,7 +1058,7 @@ class EffectSystem:
         if zone == EffectZone.HAND:
             return player.hand[index]
         if zone == EffectZone.TAVERN:
-            return player.tavern.slots[index]
+            return player.tavern.target_card(index)
         raise ValueError(f"Unsupported indexed target zone: {zone}")
 
     def resolve_target_ref(self, player_id, zone, index):
@@ -1229,16 +1297,23 @@ class EffectSystem:
         definition = self._spellcraft.get(source_card.get("id"))
         if definition is None:
             return None
+        return self.grant_spellcraft_spell(
+            player_id, definition.spell_card_id,
+            golden=self.is_golden(source_card), source_id=source_card.get("id"),
+        )
+
+    def grant_spellcraft_spell(self, player_id, spell_card_id, *, golden=False, source_id=None):
+        """Grant a temporary generated Spellcraft using the ordinary hand lifecycle."""
         if len(self.game.get_player(player_id).hand) >= self.MAX_HAND_SIZE:
             return None
 
         spell = self.create_card(
-            definition.spell_card_id,
-            golden=self.is_golden(source_card),
+            spell_card_id,
+            golden=golden,
             generated=True,
         )
         spell["_spellcraft_temporary"] = True
-        spell["_spellcraft_source_id"] = source_card.get("id")
+        spell["_spellcraft_source_id"] = source_id
         self.game.get_player(player_id).hand.append(spell)
         self.events.emit(GameEvent.CARD_GENERATED, player_id=player_id, card=spell)
         self.events.emit(GameEvent.CARD_ADDED_TO_HAND, player_id=player_id, card=spell)

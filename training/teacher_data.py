@@ -146,7 +146,8 @@ class TeacherDataGenerator:
         game_id = f"teacher-{int(game_index):05d}-seed-{int(game_seed)}"
 
         with self._global_random_scope(game_seed):
-            game = Bob(cards_file=self.config.cards_file)
+            # Seed before initialization, including active tribes and offers.
+            game = Bob(cards_file=self.config.cards_file, seed=game_seed)
             game.initialize_game()
             self._seed_game_components(game, rng)
 

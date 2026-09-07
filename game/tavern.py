@@ -21,6 +21,31 @@ class Tavern:
     The CardPool owns the available physical card copies.
     """
 
+    @property
+    def spell_target_index(self):
+        """Spell lane follows the minion slots in indexed Tavern targets."""
+        return len(self.slots)
+
+    def target_card(self, index):
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("Invalid Tavern target index.")
+        if index == self.spell_target_index:
+            return self.spell
+        if index >= len(self.slots):
+            raise ValueError("Invalid Tavern target index.")
+        return self.slots[index]
+
+    def take_target_card(self, index, *, expected_card):
+        """Transfer a current offering without returning or generating a copy."""
+        card = self.target_card(index)
+        if not isinstance(card, dict) or card is not expected_card:
+            raise ValueError("Tavern target is empty or stale.")
+        if index == self.spell_target_index:
+            self.spell = None
+        else:
+            self.slots[index] = None
+        return card
+
     def __init__(self, player_id, tier=1):
         if tier < 1 or tier > 6:
             raise ValueError(
