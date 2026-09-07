@@ -49,6 +49,7 @@ ROCK_MASTER_VOONE_UPBEAT_HARMONY = 99034
 SHUDDERWOCK_SNICKER_SNACK = 58028
 RAT_KING_A_TALE_OF_KINGS = 63127
 CAPTAIN_EUDORA_BURIED_TREASURE = 62250
+TAETHELAN_RELIQUARY_RESEARCH = 105432
 
 # Generated reward IDs.
 TAVERN_COIN = 104436
@@ -219,14 +220,26 @@ def _dinotamer_brann_battle_brand(ctx):
 def _alexstrasza_queen_of_dragons(ctx):
     if not _same_player(ctx):
         return
-    candidates = _generated_lobby_minions(ctx.system, minion_type="Dragon")
-    ctx.system.discover_cards(
-        ctx.source_player_id,
-        candidates,
-        count=3,
-        resolver_key="add_card_to_hand",
-        metadata={"hero_power": ALEXSTRASZA_QUEEN_OF_DRAGONS},
-    )
+    ctx.system.discover_pool_minions(ctx.source_player_id,
+        lambda card: _eligible_hero_discover(ctx.game, card, "Dragon"),
+        source_card_id=ALEXSTRASZA_QUEEN_OF_DRAGONS)
+
+
+def _eligible_hero_discover(game, card, minion_type, keyword=None):
+    return (card.get("cardType") == "minion"
+            and is_minion_available_for_lobby(card, game.active_minion_types)
+            and game.effects.is_minion_type(card, minion_type)
+            and (keyword is None or game.effects.has_keyword(card, keyword)))
+
+
+def _can_discover_dragon(game, player):
+    return any(_eligible_hero_discover(game, card, "Dragon")
+               for card in game.pool.available_cards)
+
+
+def _can_discover_magnetic(game, player):
+    return any(_eligible_hero_discover(game, card, "Mech", "Magnetic")
+               for card in game.pool.available_cards)
 
 
 def _doctor_hollidae_blessing_of_the_nine_frogs(ctx):
@@ -361,6 +374,22 @@ def _tavern_targets(context):
     ]
 
 
+def _tavern_card_targets(context):
+    refs = _tavern_targets(context)
+    tavern = context.game.get_player(context.player_id).tavern
+    if isinstance(tavern.spell, dict):
+        refs.append(TargetRef(player_id=context.player_id, zone=EffectZone.TAVERN,
+                              index=tavern.spell_target_index, card=tavern.spell))
+    return refs
+
+
+def _can_take_tavern_card(game, player):
+    return len(player.hand) < player.MAX_HAND_SIZE and (
+        isinstance(player.tavern.spell, dict)
+        or any(isinstance(card, dict) for card in player.tavern.slots)
+    )
+
+
 def _malygos_arcane_alteration(ctx):
     if not _same_player(ctx):
         return
@@ -385,17 +414,9 @@ def _malygos_arcane_alteration(ctx):
 def _millificent_tinker(ctx):
     if not _same_player(ctx):
         return
-    candidates = [
-        card for card in _generated_lobby_minions(ctx.system, minion_type="Mech")
-        if ctx.system.has_keyword(card, "Magnetic")
-    ]
-    ctx.system.discover_cards(
-        ctx.source_player_id,
-        candidates,
-        count=3,
-        resolver_key="add_card_to_hand",
-        metadata={"hero_power": MILLIFICENT_TINKER},
-    )
+    ctx.system.discover_pool_minions(ctx.source_player_id,
+        lambda card: _eligible_hero_discover(ctx.game, card, "Mech", "Magnetic"),
+        source_card_id=MILLIFICENT_TINKER)
 
 
 def _can_take_tavern_minion(game, player):
@@ -439,14 +460,10 @@ def _lich_bazhial_graveyard_shift(ctx):
     if target_ref is None or target_ref.zone is not EffectZone.TAVERN:
         return
     player = ctx.game.get_player(ctx.source_player_id)
-    if target_ref.index < 0 or target_ref.index >= len(player.tavern.slots):
-        return
-    card = player.tavern.slots[target_ref.index]
-    if not isinstance(card, dict):
-        return
-    if _take_tavern_minion(ctx, target_ref.index) is None:
-        return
-    player.tavern.slots[target_ref.index] = None
+    card = player.tavern.take_target_card(target_ref.index, expected_card=target_ref.card)
+    player.hand.append(card)
+    ctx.system.events.emit(GameEvent.CARD_ADDED_TO_HAND,
+                           player_id=ctx.source_player_id, card=card)
     armor_damage, health_damage = player.take_damage(2)
     ctx.system.events.emit(
         GameEvent.PLAYER_DAMAGED,
@@ -454,6 +471,7 @@ def _lich_bazhial_graveyard_shift(ctx):
         amount=2,
         armor_damage=armor_damage,
         health_damage=health_damage,
+        self_damage=True,
         source_card=ctx.source,
     )
 
@@ -489,7 +507,7 @@ def _deathwing_all_will_burn(ctx):
         seen.add(id(side))
         for minion in side.board:
             if isinstance(minion, dict):
-                ctx.buff(minion, attack=2, health=0)
+                ctx.system.apply_permanent_combat_buff(side, minion, attack=2)
 
 
 def _source_combat_side(ctx):
@@ -550,7 +568,8 @@ def _lady_vashj_relics_of_the_deep(ctx):
         return
     chosen = ctx.random_choice(_generated_spellcraft_cards(ctx.system))
     if chosen is not None:
-        ctx.system.add_generated_to_hand(ctx.source_player_id, chosen)
+        ctx.system.grant_spellcraft_spell(ctx.source_player_id, chosen["id"],
+                                          source_id=LADY_VASHJ_RELICS_OF_THE_DEEP)
 
 
 def _rock_master_voone_upbeat_harmony(ctx):
@@ -632,6 +651,13 @@ def _captain_eudora_buried_treasure(ctx):
     ctx.system.add_generated_to_hand(ctx.source_player_id, golden)
 
 
+def _taethelan_spell_bought(ctx):
+    if not _same_player(ctx):
+        return
+    power = ctx.game.get_player(ctx.source_player_id).get_hero_power()
+    power["spell_purchase_progress"] = (int(power.get("spell_purchase_progress", 0)) + 1) % 3
+
+
 def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     """Register the currently audited Hero Power subset exactly once."""
 
@@ -643,6 +669,15 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     hero_powers = HeroPowerSystem.for_game(game, register_content=False)
     if getattr(hero_powers, "_audited_content_registered", False):
         return hero_powers
+
+    hero_powers.register_passive(TAETHELAN_RELIQUARY_RESEARCH)
+    effects.register_effect(
+        TAETHELAN_RELIQUARY_RESEARCH,
+        GameEvent.SPELL_BOUGHT,
+        _taethelan_spell_bought,
+        zones=(EffectZone.HERO_POWER,),
+        name="Tae'thelan — Reliquary Research",
+    )
 
     # Trade Prince Gallywix — Smart Savings
     # Triggered/passive economy: each sale banks +1 Gold for next turn.
@@ -759,7 +794,8 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
     # Register passive classification only: an extra grant would double-count.
     hero_powers.register_passive(PATCHWERK_ALL_PATCHED_UP)
 
-    hero_powers.register_active(ALEXSTRASZA_QUEEN_OF_DRAGONS, unlock_tavern_tier=4)
+    hero_powers.register_active(ALEXSTRASZA_QUEEN_OF_DRAGONS, unlock_tavern_tier=4,
+                                condition=_can_discover_dragon)
     effects.register_effect(
         ALEXSTRASZA_QUEEN_OF_DRAGONS,
         GameEvent.HERO_POWER_USED,
@@ -872,7 +908,8 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
         name="Malygos — Arcane Alteration",
     )
 
-    hero_powers.register_active(MILLIFICENT_TINKER, unlock_tavern_tier=4)
+    hero_powers.register_active(MILLIFICENT_TINKER, unlock_tavern_tier=4,
+                                condition=_can_discover_magnetic)
     effects.register_effect(
         MILLIFICENT_TINKER,
         GameEvent.HERO_POWER_USED,
@@ -890,8 +927,8 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
         name="Pyramad — Brick by Brick",
     )
 
-    hero_powers.register_active(LICH_BAZHIAL_GRAVEYARD_SHIFT, condition=_can_take_tavern_minion)
-    effects.register_target_rule(LICH_BAZHIAL_GRAVEYARD_SHIFT, _tavern_targets)
+    hero_powers.register_active(LICH_BAZHIAL_GRAVEYARD_SHIFT, condition=_can_take_tavern_card)
+    effects.register_target_rule(LICH_BAZHIAL_GRAVEYARD_SHIFT, _tavern_card_targets)
     effects.register_effect(
         LICH_BAZHIAL_GRAVEYARD_SHIFT,
         GameEvent.HERO_POWER_USED,
@@ -910,8 +947,12 @@ def register_audited_hero_power_effects(game) -> HeroPowerSystem:
         name="Xyrella — See the Light",
     )
 
-    # Deathwing's draft does not persist combat Attack to recruitment cards.
-    # Do not install either its rule or its event handler until that is fixed.
+    hero_powers.register_passive(DEATHWING_ALL_WILL_BURN)
+    effects.register_effect(
+        DEATHWING_ALL_WILL_BURN, GameEvent.COMBAT_START,
+        _deathwing_all_will_burn, zones=(EffectZone.HERO_POWER,),
+        name="Deathwing — ALL Will Burn!",
+    )
 
     hero_powers.register_passive(ALAKIR_SWATTING_INSECTS)
     effects.register_effect(

@@ -404,16 +404,16 @@ def test_xyrella_sets_stolen_tavern_minion_to_two_two():
     assert game.hero_powers.get_rule(XYRELLA_SEE_THE_LIGHT) is not None
 
 
-def test_deathwing_draft_is_not_registered_until_permanence_is_supported():
+def test_deathwing_buffs_both_combat_sides():
     game, player = setup_game(60369)
     own = game.effects.create_card(120031)
     enemy = game.effects.create_card(120031)
     side_a = game.combat.engine.create_side(0, 1, [own])
     side_b = game.combat.engine.create_side(1, 1, [enemy])
     game.events.emit(GameEvent.COMBAT_START, side_a=side_a, side_b=side_b)
-    assert side_a.board[0]["attack"] == 2
-    assert side_b.board[0]["attack"] == 2
-    assert game.hero_powers.get_rule(DEATHWING_ALL_WILL_BURN) is None
+    assert side_a.board[0]["attack"] == 4
+    assert side_b.board[0]["attack"] == 4
+    assert game.hero_powers.get_rule(DEATHWING_ALL_WILL_BURN) is not None
 
 
 def test_alakir_marks_leftmost_combat_minion():

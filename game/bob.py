@@ -12,6 +12,7 @@ from .combat import Combat
 from .dark_gifts import DarkGiftSystem
 from .effects import EffectSystem
 from .events import EventDispatcher, GameEvent
+from .economy import tavern_spell_purchase_cost
 from .heroes import HEROES
 from .lobby import roll_active_minion_types
 from .player import Player
@@ -549,7 +550,7 @@ class Bob:
         if len(player.hand) >= player.MAX_HAND_SIZE:
             raise ValueError("Hand is full.")
 
-        cost = int(spell.get("manaCost", 0) or 0)
+        cost = tavern_spell_purchase_cost(player, spell)
         if player.gold < cost:
             raise ValueError("Not enough Gold.")
         player.hand.append(spell)

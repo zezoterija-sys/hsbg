@@ -849,7 +849,7 @@ class DeterminizedBattlegroundsEnvironment:
             # They are not part of the root hand/shop counts removed above.
             for offer in choice.options:
                 self.belief.consume_visible_card(game.pool, offer.minion)
-        elif choice.resolver_key == game.triples.RESOLVER_KEY:
+        elif choice.resolver_key in (game.triples.RESOLVER_KEY, "physical_pool_discover"):
             for offer in choice.options:
                 self.belief.consume_visible_card(game.pool, offer)
 

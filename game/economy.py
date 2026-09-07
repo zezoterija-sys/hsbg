@@ -96,12 +96,20 @@ def tavern_spell_purchase_resource(spell) -> str:
     return "gold"
 
 
+def tavern_spell_purchase_cost(player, spell) -> int:
+    """Quote a purchase without changing the card or consuming player state."""
+    power = getattr(player, "hero_power", None) or {}
+    if power.get("id") == 105432 and int(power.get("spell_purchase_progress", 0)) == 2:
+        return 0
+    return max(0, int(spell.get("manaCost", 0) or 0))
+
+
 def can_pay_tavern_spell(player, spell) -> bool:
     """Return whether ``player`` can pay the printed Tavern-spell cost."""
 
     if not isinstance(spell, dict):
         return False
-    cost = max(0, int(spell.get("manaCost", 0) or 0))
+    cost = tavern_spell_purchase_cost(player, spell)
     if tavern_spell_purchase_resource(spell) == "health":
         # Health-paid shop purchases cannot reduce the hero to 0.
         return int(getattr(player, "health", 0) or 0) > cost
@@ -112,7 +120,7 @@ def pay_tavern_spell_cost(effects, player_id, spell):
     """Pay one Tavern spell's purchase cost and return ``(resource, amount)``."""
 
     player = effects.game.get_player(player_id)
-    cost = max(0, int(spell.get("manaCost", 0) or 0))
+    cost = tavern_spell_purchase_cost(player, spell)
     resource = tavern_spell_purchase_resource(spell)
 
     if resource == "gold":
@@ -126,6 +134,9 @@ def pay_tavern_spell_cost(effects, player_id, spell):
 
     if int(getattr(player, "health", 0) or 0) <= cost:
         raise ValueError("Not enough Health to buy this Tavern spell.")
+
+    if cost == 0:
+        return resource, cost
 
     # A Health cost is hero damage for current Battlegrounds interactions such
     # as Soul Rewinder. It bypasses Armor because the card explicitly costs

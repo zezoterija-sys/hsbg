@@ -129,7 +129,7 @@ class EncodedObservation:
 class ObservationEncoder:
     """Convert AgentObservation into stable model tensors."""
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     # Fixed schema order, independent of future engine lobby rules.
     LOBBY_MINION_TYPES = (
@@ -298,6 +298,7 @@ class ObservationEncoder:
         "self_hero_power_uses_turn",
         "self_hero_power_uses_game",
         "self_hero_power_extra_uses_turn",
+        "self_hero_power_spell_purchase_progress",
     )
 
     CHOICE_SCALAR_NAMES = (
@@ -508,6 +509,7 @@ class ObservationEncoder:
             self._bounded_scale(player.hero_power_state.get("uses_turn", 0), 10.0),
             self._bounded_scale(player.hero_power_state.get("uses_game", 0), 100.0),
             self._bounded_scale(player.hero_power_state.get("extra_uses_turn", 0), 10.0),
+            self._bounded_scale((player.hero_power or {}).get("spell_purchase_progress", 0), 2.0),
         ])
 
         pending = observation.pending_choice
